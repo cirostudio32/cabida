@@ -1,12 +1,15 @@
 """
 main.py — Motor de auditoría RNE + renderizado arquitectónico en Python.
-FastAPI backend que genera geometría Y renderiza la planta con matplotlib.
+FastAPI backend que genera geometría + empaqueta un objeto JSON normalizado
+listo para consumo por motores WebGL (Three.js) o cualquier otro cliente.
 """
 
 import math
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+import os
 from pydantic import BaseModel
 from typing import List, Tuple, Optional, Dict, Any
 from shapely.geometry import Polygon
@@ -22,6 +25,27 @@ from renderer import (
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Serve static files via explicit routes (API routes defined below will take priority)
+@app.get("/")
+async def serve_index():
+    return FileResponse(os.path.join(BASE_DIR, "index.html"))
+
+@app.get("/styles.css")
+async def serve_css():
+    return FileResponse(os.path.join(BASE_DIR, "styles.css"))
+
+@app.get("/main.js")
+async def serve_main_js():
+    return FileResponse(os.path.join(BASE_DIR, "main.js"))
+
+@app.get("/viewer3d.js")
+async def serve_viewer3d_js():
+    path = os.path.join(BASE_DIR, "viewer3d.js")
+    print(f"Serving viewer3d.js from: {path}")
+    return FileResponse(path)
 
 # ═══════════════════════════════════════════════════════════════
 # CONFIGURACIÓN MAESTRA RNE (Reglamento Nacional de Edificaciones)
@@ -50,7 +74,6 @@ class ProyectoInmobiliario(BaseModel):
     zonificacion: str
     num_ascensores: int
     num_departamentos: int
-    # Parámetros adicionales para renderizado
     frente: Optional[float] = 10.0
     fondo: Optional[float] = 10.0
     derecha: Optional[float] = 20.0
@@ -63,13 +86,38 @@ class ProyectoInmobiliario(BaseModel):
     ciego_izquierda: Optional[bool] = True
 
 
-def poly_to_js(sp):
+# ═══════════════════════════════════════════════════════════════
+# HELPERS DE GEOMETRÍA
+# ═══════════════════════════════════════════════════════════════
+
+def r3(v: float) -> float:
+    """Round to 3 decimals."""
+    return round(v, 3)
+
+
+def poly_to_js(sp) -> list:
     """Shapely Polygon → [{x,y}, …] for JS."""
     if sp is None or sp.is_empty:
         return []
     if sp.geom_type == "MultiPolygon":
         sp = max(sp.geoms, key=lambda g: g.area)
-    return [{"x": round(x, 3), "y": round(y, 3)} for x, y in list(sp.exterior.coords)[:-1]]
+    return [{"x": r3(x), "y": r3(y)} for x, y in list(sp.exterior.coords)[:-1]]
+
+
+def poly_to_coords(sp) -> list:
+    """Shapely Polygon → [[x,y], …] normalized coords."""
+    if sp is None or sp.is_empty:
+        return []
+    if sp.geom_type == "MultiPolygon":
+        sp = max(sp.geoms, key=lambda g: g.area)
+    return [[r3(x), r3(y)] for x, y in list(sp.exterior.coords)[:-1]]
+
+
+def pts_to_coords(pts: list) -> list:
+    """[{x,y},...] → [[x,y],...] rounded."""
+    if not pts:
+        return []
+    return [[r3(p["x"]), r3(p["y"])] for p in pts]
 
 
 def safe_clip(poly, boundary):
@@ -88,7 +136,6 @@ def safe_clip(poly, boundary):
 
 
 def make_rect(cx, cy, dx_l, dy_l, dx_s, dy_s, half_l, half_s):
-    """Create a rectangle from center, direction vectors and half-extents."""
     return Polygon([
         (cx - dx_l * half_l - dx_s * half_s, cy - dy_l * half_l - dy_s * half_s),
         (cx + dx_l * half_l - dx_s * half_s, cy + dy_l * half_l - dy_s * half_s),
@@ -98,15 +145,10 @@ def make_rect(cx, cy, dx_l, dy_l, dx_s, dy_s, half_l, half_s):
 
 
 def _interpolate(pA, pB, t):
-    """Interpolate between two points."""
-    return {
-        "x": pA["x"] + (pB["x"] - pA["x"]) * t,
-        "y": pA["y"] + (pB["y"] - pA["y"]) * t,
-    }
+    return {"x": pA["x"] + (pB["x"] - pA["x"]) * t, "y": pA["y"] + (pB["y"] - pA["y"]) * t}
 
 
 def _get_cell(quad, u1, u2, v1, v2):
-    """Get a cell from a quad polygon (bilinear interpolation)."""
     def _gp(u, v):
         top = _interpolate(quad[0], quad[1], u)
         bot = _interpolate(quad[3], quad[2], u)
@@ -115,7 +157,6 @@ def _get_cell(quad, u1, u2, v1, v2):
 
 
 def _calculate_poly_area(poly):
-    """Calculate area with Shoelace formula for [{x,y}...] format."""
     n = len(poly)
     if n < 3:
         return 0
@@ -135,6 +176,43 @@ def _poly_width(poly):
     return math.hypot(dx, dy)
 
 
+def _centroid(pts: list) -> list:
+    """Return centroid [x, y] of a [{x,y},...] or [[x,y],...] polygon."""
+    if not pts:
+        return [0, 0]
+    if isinstance(pts[0], dict):
+        cx = sum(p["x"] for p in pts) / len(pts)
+        cy = sum(p["y"] for p in pts) / len(pts)
+    else:
+        cx = sum(p[0] for p in pts) / len(pts)
+        cy = sum(p[1] for p in pts) / len(pts)
+    return [r3(cx), r3(cy)]
+
+
+def _normalize_coords(coords: list, offset_x: float, offset_y: float) -> list:
+    """Offset all [[x,y],...] points by (-offset_x, -offset_y)."""
+    return [[r3(p[0] - offset_x), r3(p[1] - offset_y)] for p in coords]
+
+
+def _validate_adjacency(dpto_coords: list, hall_coords: list, tolerance: float = 0.50) -> bool:
+    """
+    Returns True if at least one segment of dpto_coords shares an edge
+    (or is within tolerance) with hall_coords.
+    Uses bounding-box pre-check + vertex proximity.
+    """
+    if not dpto_coords or not hall_coords:
+        return False
+    for dp in dpto_coords:
+        for hp in hall_coords:
+            if abs(dp[0] - hp[0]) <= tolerance and abs(dp[1] - hp[1]) <= tolerance:
+                return True
+    return False
+
+
+# ═══════════════════════════════════════════════════════════════
+# GENERACIÓN DE GEOMETRÍA (núcleo, idéntico al anterior)
+# ═══════════════════════════════════════════════════════════════
+
 def _generate_geometry(proyecto: ProyectoInmobiliario):
     """Core geometry generation — shared between audit and render endpoints."""
     lote = Polygon(proyecto.coordenadas_lote)
@@ -145,12 +223,10 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
     num_dptos = max(2, proyecto.num_departamentos)
     num_asc = max(0, proyecto.num_ascensores)
 
-    # ── 1. NORMATIVOS ──
     pozo_final = max(RNE["pozos_luz"]["min_abs"], h_edif * RNE["pozos_luz"]["ratio_dorm"])
     nec_ascensor = h_edif > RNE["circulacion_v"]["h_max_sin_ascensor"]
     nec_esc_prot = h_edif > RNE["circulacion_v"]["h_max_sin_esc_prot"]
 
-    # ── 2. ORIENTACIÓN (MRR) ──
     mrr = lote.minimum_rotated_rectangle
     mc = list(mrr.exterior.coords)
     d01 = math.hypot(mc[1][0] - mc[0][0], mc[1][1] - mc[0][1])
@@ -171,19 +247,16 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
     half_S = short_len / 2
     hw = RNE["circulacion_h"]["hall_ancho"] / 2
 
-    # ── 3. HALL ──
     hall_poly = make_rect(cx, cy, dl_x, dl_y, ds_x, ds_y, half_L, hw)
     hall_clipped = safe_clip(hall_poly, lote)
 
-    # ── 4. CORE ──
     esc_w = RNE["circulacion_v"]["esc_ancho"]
     esc_half_l = 2.50 / 2
     esc_depth = esc_w * 2
 
-    esc_center_s = hw + esc_depth / 2
     stair_poly = Polygon([
-        (cx - dl_x * esc_half_l + ds_x * hw,           cy - dl_y * esc_half_l + ds_y * hw),
-        (cx + dl_x * esc_half_l + ds_x * hw,           cy + dl_y * esc_half_l + ds_y * hw),
+        (cx - dl_x * esc_half_l + ds_x * hw,             cy - dl_y * esc_half_l + ds_y * hw),
+        (cx + dl_x * esc_half_l + ds_x * hw,             cy + dl_y * esc_half_l + ds_y * hw),
         (cx + dl_x * esc_half_l + ds_x * (hw + esc_depth), cy + dl_y * esc_half_l + ds_y * (hw + esc_depth)),
         (cx - dl_x * esc_half_l + ds_x * (hw + esc_depth), cy - dl_y * esc_half_l + ds_y * (hw + esc_depth)),
     ])
@@ -195,10 +268,10 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
         offset = esc_half_l + 0.20 + asc_l / 2 + i * (asc_l + 0.30)
         ac = (cx + dl_x * offset, cy + dl_y * offset)
         asc_poly = Polygon([
-            (ac[0] - dl_x * asc_l / 2 + ds_x * hw,              ac[1] - dl_y * asc_l / 2 + ds_y * hw),
-            (ac[0] + dl_x * asc_l / 2 + ds_x * hw,              ac[1] + dl_y * asc_l / 2 + ds_y * hw),
-            (ac[0] + dl_x * asc_l / 2 + ds_x * (hw + asc_w),    ac[1] + dl_y * asc_l / 2 + ds_y * (hw + asc_w)),
-            (ac[0] - dl_x * asc_l / 2 + ds_x * (hw + asc_w),    ac[1] - dl_y * asc_l / 2 + ds_y * (hw + asc_w)),
+            (ac[0] - dl_x * asc_l / 2 + ds_x * hw,           ac[1] - dl_y * asc_l / 2 + ds_y * hw),
+            (ac[0] + dl_x * asc_l / 2 + ds_x * hw,           ac[1] + dl_y * asc_l / 2 + ds_y * hw),
+            (ac[0] + dl_x * asc_l / 2 + ds_x * (hw + asc_w), ac[1] + dl_y * asc_l / 2 + ds_y * (hw + asc_w)),
+            (ac[0] - dl_x * asc_l / 2 + ds_x * (hw + asc_w), ac[1] - dl_y * asc_l / 2 + ds_y * (hw + asc_w)),
         ])
         asc_polys.append(asc_poly)
 
@@ -219,18 +292,16 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
              cy - dl_y * esc_half_l - dl_y * 1.50 + ds_y * (hw + esc_depth)),
         ])
 
-    # ── 5. PATIO DE LUCES ──
     patio_dim = min(pozo_final, short_len * 0.35)
     patio_half = patio_dim / 2
     patio_poly = Polygon([
-        (cx - dl_x * patio_half - ds_x * hw,              cy - dl_y * patio_half - ds_y * hw),
-        (cx + dl_x * patio_half - ds_x * hw,              cy + dl_y * patio_half - ds_y * hw),
+        (cx - dl_x * patio_half - ds_x * hw,               cy - dl_y * patio_half - ds_y * hw),
+        (cx + dl_x * patio_half - ds_x * hw,               cy + dl_y * patio_half - ds_y * hw),
         (cx + dl_x * patio_half - ds_x * (hw + patio_dim), cy + dl_y * patio_half - ds_y * (hw + patio_dim)),
         (cx - dl_x * patio_half - ds_x * (hw + patio_dim), cy - dl_y * patio_half - ds_y * (hw + patio_dim)),
     ])
     patio_clipped = safe_clip(patio_poly, lote)
 
-    # ── 6. DUCTOS ──
     duct_dim = 1.50
     duct_half = duct_dim / 2
     ductos = []
@@ -238,16 +309,15 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
         duct_offset_l = half_L * 0.45 * sign
         dc = (cx + dl_x * duct_offset_l, cy + dl_y * duct_offset_l)
         d_poly = Polygon([
-            (dc[0] - dl_x * duct_half - ds_x * hw,              dc[1] - dl_y * duct_half - ds_y * hw),
-            (dc[0] + dl_x * duct_half - ds_x * hw,              dc[1] + dl_y * duct_half - ds_y * hw),
-            (dc[0] + dl_x * duct_half - ds_x * (hw + duct_dim), dc[1] + dl_y * duct_half - ds_y * (hw + duct_dim)),
-            (dc[0] - dl_x * duct_half - ds_x * (hw + duct_dim), dc[1] - dl_y * duct_half - ds_y * (hw + duct_dim)),
+            (dc[0] - dl_x * duct_half - ds_x * hw,               dc[1] - dl_y * duct_half - ds_y * hw),
+            (dc[0] + dl_x * duct_half - ds_x * hw,               dc[1] + dl_y * duct_half - ds_y * hw),
+            (dc[0] + dl_x * duct_half - ds_x * (hw + duct_dim),  dc[1] + dl_y * duct_half - ds_y * (hw + duct_dim)),
+            (dc[0] - dl_x * duct_half - ds_x * (hw + duct_dim),  dc[1] - dl_y * duct_half - ds_y * (hw + duct_dim)),
         ])
         clipped = safe_clip(d_poly, lote)
         if clipped:
             ductos.append(clipped)
 
-    # ── 7. DEPARTAMENTOS ──
     dptos_a = max(1, num_dptos // 2)
     dptos_b = max(1, num_dptos - dptos_a)
     apartments = []
@@ -261,24 +331,21 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
             e_max = min(L_max, exclude_max)
             s1 = max(0, e_min - L_min)
             s2 = max(0, L_max - e_max)
-
             if s1 + s2 < 0.1:
                 return []
-
             n1 = int(round(num_units * (s1 / (s1 + s2)))) if s1 > 2.0 else 0
             n2 = num_units - n1 if s2 > 2.0 else 0
-
-            if n2 == 0 and s2 > max(3.0, s1/max(1,n1) if n1 else 0) and num_units >= 2:
+            if n2 == 0 and s2 > max(3.0, s1 / max(1, n1) if n1 else 0) and num_units >= 2:
                 n2 = 1; n1 -= 1
-            if n1 == 0 and s1 > max(3.0, s2/max(1,n2) if n2 else 0) and num_units >= 2:
+            if n1 == 0 and s1 > max(3.0, s2 / max(1, n2) if n2 else 0) and num_units >= 2:
                 n1 = 1; n2 -= 1
-
             segments = []
             if n1 > 0: segments.append((L_min, e_min, n1))
             if n2 > 0: segments.append((e_max, L_max, n2))
 
         for seg_start, seg_end, n in segments:
-            if n <= 0: continue
+            if n <= 0:
+                continue
             w = (seg_end - seg_start) / n
             for i in range(n):
                 off = seg_start + i * w
@@ -292,7 +359,7 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
                     ]
                 else:
                     corners = [
-                        (cx + dl_x * off - ds_x * hw,       cy + dl_y * off - ds_y * hw),
+                        (cx + dl_x * off - ds_x * hw,        cy + dl_y * off - ds_y * hw),
                         (cx + dl_x * nxt - ds_x * hw,        cy + dl_y * nxt - ds_y * hw),
                         (cx + dl_x * nxt - ds_x * half_S,    cy + dl_y * nxt - ds_y * half_S),
                         (cx + dl_x * off - ds_x * half_S,    cy + dl_y * off - ds_y * half_S),
@@ -303,14 +370,13 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
         return units
 
     core_min_L = -esc_half_l - 0.20
-    core_max_L = (esc_half_l + 0.20 + asc_l / 2 + (num_asc - 1) * (asc_l + 0.30) + asc_l/2) if num_asc > 0 else esc_half_l + 0.20
+    core_max_L = (esc_half_l + 0.20 + asc_l / 2 + (num_asc - 1) * (asc_l + 0.30) + asc_l / 2) if num_asc > 0 else esc_half_l + 0.20
 
     apartments.extend(distribute_units(-half_L, half_L, core_min_L, core_max_L, dptos_a, 1))
     patio_min_L = -patio_half - 0.20
     patio_max_L = patio_half + 0.20
     apartments.extend(distribute_units(-half_L, half_L, patio_min_L, patio_max_L, dptos_b, -1))
 
-    # ── BUILD GEOMETRY DICT ──
     geometry = {
         "hall": poly_to_js(hall_clipped),
         "core": poly_to_js(core_clipped),
@@ -323,7 +389,7 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
     }
 
     normativa = {
-        "pozo_final": round(pozo_final, 2),
+        "pozo_final": r3(pozo_final),
         "ascensor_obligatorio": nec_ascensor,
         "esc_protegida_obligatoria": nec_esc_prot,
         "evacuacion_max": RNE["circulacion_v"]["evacuacion_max"],
@@ -336,7 +402,6 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
 
 
 def _generate_primer_piso(proyecto: ProyectoInmobiliario, geometry: dict):
-    """Generate first floor elements (lobby, commerce, ramp)."""
     frente = proyecto.frente or 10
     fondo_val = proyecto.fondo or 10
     derecha = proyecto.derecha or 20
@@ -347,7 +412,6 @@ def _generate_primer_piso(proyecto: ProyectoInmobiliario, geometry: dict):
     p2 = {"x": frente / 2, "y": 0}
     p3 = {"x": fondo_val / 2, "y": derecha}
     p4 = {"x": -fondo_val / 2, "y": izquierda}
-    polygon_pts = [p1, p2, p3, p4]
 
     rt_y = min(retiro_frontal, derecha, izquierda)
     if rt_y > 0 and izquierda > 0 and derecha > 0:
@@ -359,27 +423,22 @@ def _generate_primer_piso(proyecto: ProyectoInmobiliario, geometry: dict):
     else:
         techada_poly = [p1, p2, p3, p4]
 
-    # Apply lateral setbacks
     retiro_lat = 2.30
     frente_neto = max(1, frente)
     fondo_neto = max(1, (derecha + izquierda) / 2)
 
-    u_left = 0 if (proyecto.ciego_izquierda) else retiro_lat / frente_neto
-    u_right = 1.0 if (proyecto.ciego_derecha) else 1.0 - (retiro_lat / frente_neto)
-    v_bottom = 1.0 if (proyecto.ciego_fondo) else 1.0 - (retiro_lat / fondo_neto)
+    u_left = 0 if proyecto.ciego_izquierda else retiro_lat / frente_neto
+    u_right = 1.0 if proyecto.ciego_derecha else 1.0 - (retiro_lat / frente_neto)
+    v_bottom = 1.0 if proyecto.ciego_fondo else 1.0 - (retiro_lat / fondo_neto)
 
     lote_neto = _get_cell(techada_poly, u_left, u_right, 0, v_bottom)
 
     b_w = max(1, _poly_width(lote_neto))
-    b_d = max(1, math.hypot(
-        lote_neto[2]["x"] - lote_neto[1]["x"],
-        lote_neto[2]["y"] - lote_neto[1]["y"]
-    ))
+    b_d = max(1, math.hypot(lote_neto[2]["x"] - lote_neto[1]["x"], lote_neto[2]["y"] - lote_neto[1]["y"]))
 
     rampa_u = 3.00 / b_w
     rampa_v = min(1.0, 20.00 / b_d)
     rampa = _get_cell(lote_neto, 0, rampa_u, 0, rampa_v)
-
     u_lobby_start = max(rampa_u + 0.02, 0.38)
     u_lobby_end = min(1.0, 0.62)
 
@@ -397,7 +456,6 @@ def _generate_primer_piso(proyecto: ProyectoInmobiliario, geometry: dict):
 
 
 def _generate_sotano(proyecto: ProyectoInmobiliario, geometry: dict, normativa: dict):
-    """Generate basement level with parking stalls."""
     frente = proyecto.frente or 10
     fondo_val = proyecto.fondo or 10
     derecha = proyecto.derecha or 20
@@ -407,9 +465,7 @@ def _generate_sotano(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
     p2 = {"x": frente / 2, "y": 0}
     p3 = {"x": fondo_val / 2, "y": derecha}
     p4 = {"x": -fondo_val / 2, "y": izquierda}
-    polygon_pts = [p1, p2, p3, p4]
 
-    # Inset for basement
     inset = 0.30
     slab = [
         {"x": p1["x"] + inset, "y": p1["y"] + inset},
@@ -428,7 +484,6 @@ def _generate_sotano(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
     stall_d = 5.00
     aisle_w = 6.00
 
-    # Generate parking stalls in a grid
     xs = [p["x"] for p in slab]
     ys = [p["y"] for p in slab]
     min_x, max_x = min(xs), max(xs)
@@ -441,7 +496,6 @@ def _generate_sotano(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
     y_cursor = min_y
 
     while remaining > 0 and y_cursor + stall_d <= max_y:
-        # Top row
         x_cursor = min_x
         row_placed = False
         while x_cursor + stall_w <= max_x and remaining > 0:
@@ -452,13 +506,10 @@ def _generate_sotano(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
                 {"x": round(x_cursor, 3), "y": round(y_cursor + stall_d, 3)},
             ]
             stalls.append({"id": f"E-{stall_num:02d}", "poly": stall})
-            stall_num += 1
-            remaining -= 1
-            row_placed = True
+            stall_num += 1; remaining -= 1; row_placed = True
             x_cursor += stall_w
 
         if row_placed:
-            # Aisle
             aisle_y = y_cursor + stall_d
             if aisle_y + aisle_w < max_y:
                 aisle = [
@@ -471,8 +522,6 @@ def _generate_sotano(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
                 y_cursor = aisle_y + aisle_w
             else:
                 break
-
-            # Bottom row (sharing aisle)
             if remaining > 0 and y_cursor + stall_d <= max_y:
                 x_cursor = min_x
                 while x_cursor + stall_w <= max_x and remaining > 0:
@@ -483,14 +532,12 @@ def _generate_sotano(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
                         {"x": round(x_cursor, 3), "y": round(y_cursor + stall_d, 3)},
                     ]
                     stalls.append({"id": f"E-{stall_num:02d}", "poly": stall})
-                    stall_num += 1
-                    remaining -= 1
+                    stall_num += 1; remaining -= 1
                     x_cursor += stall_w
                 y_cursor += stall_d
         else:
             y_cursor += 1.0
 
-    # Cisterna calculation
     dot = normativa.get("dotaciones", RNE["instalaciones"])
     agua_1d = dot.get("agua_1d", 500) / 1000
     agua_2d = dot.get("agua_2d", 850) / 1000
@@ -508,7 +555,6 @@ def _generate_sotano(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
     total_cist = dom + aci_m3
     cuarto_maq = max(15, total_cist * 0.12)
 
-    # Rampa in basement
     rampa = [
         {"x": round(min_x, 3), "y": round(min_y, 3)},
         {"x": round(min_x + 3.0, 3), "y": round(min_y, 3)},
@@ -516,34 +562,24 @@ def _generate_sotano(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
         {"x": round(min_x, 3), "y": round(max_y, 3)},
     ]
 
-    # ── CISTERNA SUBDIVISION (IS.010) ──
     cisternas = []
     if total_cist > 0:
-        cist_depth = 2.5  # tank depth in meters
+        cist_depth = 2.5
         area_dom_a = (dom / 2) / cist_depth
         area_dom_b = (dom / 2) / cist_depth
         area_aci = aci_m3 / cist_depth
         area_maq = cuarto_maq
         total_cist_area = area_dom_a + area_dom_b + area_aci + area_maq
-
-        # Place cisterns at the bottom of the slab, full width
         cist_width = max_x - min_x
         if cist_width > 0 and total_cist_area > 0:
             cist_height = total_cist_area / cist_width
             cist_top = max_y - cist_height
-
-            # Subdivide horizontally (stacking from bottom up)
             zones = [
-                {"label": f"CIST. CONS. A\n{dom/2:.1f} m3", "area": area_dom_a,
-                 "fill": "#bfdbfe", "stroke": "#2563eb"},
-                {"label": f"CIST. CONS. B\n{dom/2:.1f} m3", "area": area_dom_b,
-                 "fill": "#93c5fd", "stroke": "#1d4ed8"},
-                {"label": f"CIST. ACI\n{aci_m3:.1f} m3", "area": area_aci,
-                 "fill": "#fca5a5", "stroke": "#dc2626"},
-                {"label": f"CTO. MAQ.\n{cuarto_maq:.1f} m2", "area": area_maq,
-                 "fill": "#fef3c7", "stroke": "#d97706"},
+                {"label": f"CIST. CONS. A\n{dom/2:.1f} m3", "area": area_dom_a, "fill": "#bfdbfe", "stroke": "#2563eb"},
+                {"label": f"CIST. CONS. B\n{dom/2:.1f} m3", "area": area_dom_b, "fill": "#93c5fd", "stroke": "#1d4ed8"},
+                {"label": f"CIST. ACI\n{aci_m3:.1f} m3", "area": area_aci, "fill": "#fca5a5", "stroke": "#dc2626"},
+                {"label": f"CTO. MAQ.\n{cuarto_maq:.1f} m2", "area": area_maq, "fill": "#fef3c7", "stroke": "#d97706"},
             ]
-
             cursor_y = cist_top
             for zone in zones:
                 zone_h = zone["area"] / cist_width if cist_width > 0 else 1
@@ -553,12 +589,7 @@ def _generate_sotano(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
                     {"x": round(max_x, 3), "y": round(cursor_y + zone_h, 3)},
                     {"x": round(min_x, 3), "y": round(cursor_y + zone_h, 3)},
                 ]
-                cisternas.append({
-                    "poly": poly,
-                    "label": zone["label"],
-                    "fill": zone["fill"],
-                    "stroke": zone["stroke"],
-                })
+                cisternas.append({"poly": poly, "label": zone["label"], "fill": zone["fill"], "stroke": zone["stroke"]})
                 cursor_y += zone_h
 
     return {
@@ -578,15 +609,255 @@ def _generate_sotano(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
 
 
 # ═══════════════════════════════════════════════════════════════
-# ENDPOINTS
+# EMPAQUETADO JSON — Estructura normalizada para Three.js / WebGL
+# ═══════════════════════════════════════════════════════════════
+
+def _build_webgl_payload(
+    proyecto: ProyectoInmobiliario,
+    geometry: dict,
+    normativa: dict,
+    primer_piso: dict,
+    sotano: dict,
+) -> dict:
+    """
+    Construye el objeto JSON completo con coordenadas normalizadas (centradas en 0,0)
+    y estructura semántica lista para consumo WebGL / Three.js.
+    """
+
+    # ── Polígono del lote para calcular centroide de normalización ──
+    frente = proyecto.frente or 10
+    fondo_val = proyecto.fondo or 10
+    derecha = proyecto.derecha or 20
+    izquierda = proyecto.izquierda or 20
+
+    p1 = {"x": -frente / 2, "y": 0}
+    p2 = {"x": frente / 2, "y": 0}
+    p3 = {"x": fondo_val / 2, "y": derecha}
+    p4 = {"x": -fondo_val / 2, "y": izquierda}
+    lote_pts = [p1, p2, p3, p4]
+
+    # Centroide del lote para normalizar a (0,0)
+    cx_norm = sum(p["x"] for p in lote_pts) / 4
+    cy_norm = sum(p["y"] for p in lote_pts) / 4
+
+    def norm(pts):
+        """[{x,y},...] → [[x-cx, y-cy],...] normalized + rounded."""
+        if not pts:
+            return []
+        return [[r3(p["x"] - cx_norm), r3(p["y"] - cy_norm)] for p in pts]
+
+    def norm_cell(cell):
+        """_get_cell result [{x,y},...] → [[x,y],...] normalized."""
+        if not cell:
+            return []
+        return [[r3(p["x"] - cx_norm), r3(p["y"] - cy_norm)] for p in cell]
+
+    # ── Lote y retiro ──
+    lote_coords = norm(lote_pts)
+
+    retiro_pts = []
+    rt_y = min(proyecto.retiro_frontal, derecha, izquierda)
+    if rt_y > 0:
+        u_l = rt_y / izquierda if izquierda > 0 else 0
+        u_r = rt_y / derecha if derecha > 0 else 0
+        pr3 = _interpolate(p2, p3, u_r)
+        pr4 = _interpolate(p1, p4, u_l)
+        retiro_pts = norm([p1, p2, pr3, pr4])
+
+    # ── Área del terreno ──
+    lote_shapely = Polygon(proyecto.coordenadas_lote)
+    area_terreno = r3(lote_shapely.area)
+
+    # ── Unidades (departamentos) ──
+    hall_coords_norm = norm(geometry.get("hall", []))
+    dptos_raw = geometry.get("departamentos", [])
+    unidades = []
+    for i, dpto_pts in enumerate(dptos_raw):
+        if not dpto_pts or len(dpto_pts) < 3:
+            continue
+        area = r3(_calculate_poly_area(dpto_pts))
+        typ = get_typology(area)
+        typ_map = {"1D": 1, "2D": 2, "3D": 3}
+        hab = typ_map.get(typ, 3)
+        coords_norm = norm(dpto_pts)
+        colinda_hall = _validate_adjacency(coords_norm, hall_coords_norm, tolerance=0.60)
+        unidades.append({
+            "id": f"X{i + 1:02d}",
+            "type": "apartment",
+            "coords": coords_norm,
+            "metadata": {
+                "area": area,
+                "tipologia": typ,
+                "habitantes": hab,
+            },
+            "validacion": {
+                "colinda_hall": colinda_hall,
+                "cumple_area_min": area >= RNE["departamentos"]["min_multifamiliar"],
+            }
+        })
+
+    # ── Área vendible y eficiencia ──
+    total_vendible = sum(u["metadata"]["area"] for u in unidades)
+    hall_area = r3(_calculate_poly_area(geometry.get("hall", [])))
+    core_area = r3(_calculate_poly_area(geometry.get("core", [])))
+    area_comun = r3(hall_area + core_area)
+    area_techada = r3(total_vendible + area_comun)
+    eficiencia = r3((total_vendible / area_techada * 100) if area_techada > 0 else 0)
+
+    # ── Núcleo ──
+    esc_presurizada = normativa.get("esc_protegida_obligatoria", False)
+    escalera_pts = norm(geometry.get("escalera", []))
+    asc_list = [norm(a) for a in geometry.get("ascensores", []) if a and len(a) >= 3]
+    vest_pts = norm(geometry.get("vestibulo", []))
+
+    # ── Técnico: patios y ductos ──
+    patio_pts = norm(geometry.get("patio", []))
+    pozo_final = normativa.get("pozo_final", 2.2)
+    ductos_list = [norm(d) for d in geometry.get("ductos", []) if d and len(d) >= 3]
+
+    patio_w = 0
+    if len(patio_pts) >= 4:
+        patio_w = math.hypot(
+            patio_pts[1][0] - patio_pts[0][0],
+            patio_pts[1][1] - patio_pts[0][1]
+        )
+
+    # ── Anotaciones (cotas y etiquetas) ──
+    anotaciones = []
+    # Cotas del terreno
+    side_labels = [
+        (lote_coords[0], lote_coords[1], f"{frente:.1f}m (Fte)", "cota"),
+        (lote_coords[1], lote_coords[2], f"{derecha:.1f}m (Der)", "cota"),
+        (lote_coords[2], lote_coords[3], f"{fondo_val:.1f}m (Fdo)", "cota"),
+        (lote_coords[3], lote_coords[0], f"{izquierda:.1f}m (Izq)", "cota"),
+    ]
+    for pa, pb, txt, clase in side_labels:
+        mid = [r3((pa[0] + pb[0]) / 2), r3((pa[1] + pb[1]) / 2)]
+        anotaciones.append({"pos": mid, "texto": txt, "clase": clase})
+
+    # Etiquetas de departamentos
+    for u in unidades:
+        if u["coords"]:
+            cen = _centroid(u["coords"])
+            anotaciones.append({
+                "pos": cen,
+                "texto": f"{u['metadata']['tipologia']} · DPTO {u['id']} · {u['metadata']['area']:.1f}m²",
+                "clase": "etiqueta"
+            })
+
+    # ── Sótano: estacionamientos (coordenadas normalizadas) ──
+    stalls_norm = []
+    for st in sotano.get("stalls", []):
+        coords_n = norm(st.get("poly", []))
+        if coords_n:
+            stalls_norm.append({"id": st["id"], "coords": coords_n})
+
+    aisles_norm = [norm(a) for a in sotano.get("aisles", []) if a and len(a) >= 3]
+
+    cisternas_norm = []
+    for c in sotano.get("cisternas", []):
+        coords_n = norm(c.get("poly", []))
+        if coords_n:
+            cisternas_norm.append({
+                "coords": coords_n,
+                "label": c.get("label", ""),
+                "fill": c.get("fill", "#bfdbfe"),
+                "stroke": c.get("stroke", "#2563eb"),
+            })
+
+    primer_piso_norm = {
+        "comercios": [norm_cell(c) for c in primer_piso.get("comercios", [])],
+        "servicios": norm_cell(primer_piso.get("servicios", [])),
+        "lobby": norm_cell(primer_piso.get("lobby", [])),
+        "rampa": norm_cell(primer_piso.get("rampa", [])),
+    }
+
+    sotano_norm = {
+        "slab": norm(sotano.get("slab", [])),
+        "stalls": stalls_norm,
+        "aisles": aisles_norm,
+        "cisternas": cisternas_norm,
+        "rampa": norm(sotano.get("rampa", [])),
+        "req_estac": sotano.get("req_estac", 0),
+        "count": sotano.get("count", 0),
+        "cisterna_total_m3": sotano.get("cisterna_total_m3", 0),
+        "cisterna_domestico": sotano.get("cisterna_domestico", 0),
+        "cisterna_aci": sotano.get("cisterna_aci", 0),
+        "cisterna_maq": sotano.get("cisterna_maq", 0),
+    }
+
+    return {
+        "metadata_proyecto": {
+            "terreno_area": area_terreno,
+            "area_vendible_planta": r3(total_vendible),
+            "area_comun_planta": area_comun,
+            "area_techada_planta": area_techada,
+            "eficiencia_total": eficiencia,
+            "pisos": proyecto.numero_pisos,
+            "altura_piso": proyecto.altura_piso or 2.80,
+            "h_edificio": r3(proyecto.numero_pisos * (proyecto.altura_piso or 2.80)),
+            "num_departamentos_planta": len(unidades),
+            "num_departamentos_total": len(unidades) * proyecto.numero_pisos,
+        },
+        "normativa": {
+            "pozo_luz_minimo": normativa.get("pozo_final"),
+            "ascensor_obligatorio": normativa.get("ascensor_obligatorio"),
+            "esc_protegida_obligatoria": normativa.get("esc_protegida_obligatoria"),
+            "evacuacion_max_m": normativa.get("evacuacion_max"),
+            "area_min_dpto_m2": normativa.get("area_min_dpto"),
+            "estacionamiento_ancho_m": normativa.get("estacionamiento_ancho"),
+            "dotaciones": normativa.get("dotaciones"),
+        },
+        "geometria": {
+            "lote": {"type": "polygon", "coords": lote_coords},
+            "retiros": [{"id": "frontal", "coords": retiro_pts}] if retiro_pts else [],
+            "unidades": unidades,
+            "circulacion": {
+                "hall": {"coords": hall_coords_norm},
+                "pasillos": [],  # reserved for future corridor subdivision
+            },
+            "nucleo": {
+                "escaleras": {
+                    "coords": escalera_pts,
+                    "tipo": "presurizada" if esc_presurizada else "abierta",
+                },
+                "ascensores": [{"coords": a} for a in asc_list],
+                "vestibulo": {"coords": vest_pts},
+                "core_envelope": {"coords": norm(geometry.get("core", []))},
+            },
+            "tecnico": {
+                "patios": [{
+                    "coords": patio_pts,
+                    "cumple_minimo": patio_w >= pozo_final,
+                    "dimension_minima_requerida": r3(pozo_final),
+                    "dimension_actual": r3(patio_w),
+                }] if patio_pts else [],
+                "ductos": [{"coords": d} for d in ductos_list],
+            },
+            "primer_piso": primer_piso_norm,
+            "sotano": sotano_norm,
+        },
+        "anotaciones": anotaciones,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+# ENDPOINT PRINCIPAL
 # ═══════════════════════════════════════════════════════════════
 
 @app.post("/auditoria-rne")
-async def validar_arquitectura(proyecto: ProyectoInmobiliario):
-    """Original audit endpoint — now also generates rendered images."""
+async def validar_arquitectura(
+    proyecto: ProyectoInmobiliario,
+    debug: bool = Query(default=False, description="Incluir renders Matplotlib como debug_renders"),
+):
+    """
+    Endpoint principal.
+    Retorna un payload JSON normalizado con estructura semántica lista
+    para Three.js / WebGL.  Si ?debug=true se añade el campo opcional
+    'debug_renders' con las imágenes base64 de Matplotlib para verificación.
+    """
     geometry, normativa = _generate_geometry(proyecto)
 
-    # Build params dict for renderer
     render_params = {
         "frente": proyecto.frente,
         "fondo": proyecto.fondo,
@@ -597,31 +868,37 @@ async def validar_arquitectura(proyecto: ProyectoInmobiliario):
         "altura_piso": proyecto.altura_piso or 2.80,
     }
 
-    data = {
-        "geometria_generada": geometry,
-        "normativa_estricta": normativa,
-    }
-
-    # Render planta típica
-    img_tipica = render_planta_tipica(data, render_params)
-
-    # Render primer piso
     primer_piso_data = _generate_primer_piso(proyecto, geometry)
-    img_primer = render_primer_piso(data, render_params, primer_piso_data)
-
-    # Render sótano
     sotano_data = _generate_sotano(proyecto, geometry, normativa)
-    img_sotano = render_sotano(data, render_params, sotano_data)
 
-    return {
-        "status": "Auditoría RNE — Spine & Ribs",
+    # ── Payload WebGL (siempre presente) ──
+    webgl_payload = _build_webgl_payload(proyecto, geometry, normativa, primer_piso_data, sotano_data)
+
+    # ── Compatibilidad hacia atrás (campos que el JS actual consume) ──
+    response = {
+        **webgl_payload,
+        # Backward-compat fields consumed by the existing main.js
+        "status": "Auditoría RNE — Spine & Ribs (WebGL Mode)",
         "geometria_generada": geometry,
         "normativa_estricta": normativa,
         "primer_piso": primer_piso_data,
         "sotano": sotano_data,
-        "renders": {
-            "planta_tipica": img_tipica,
-            "primer_piso": img_primer,
-            "sotano": img_sotano,
-        }
     }
+
+    # ── Renders debug opcionales (Matplotlib) ──
+    if debug:
+        data = {"geometria_generada": geometry, "normativa_estricta": normativa}
+        response["debug_renders"] = {
+            "planta_tipica": render_planta_tipica(data, render_params),
+            "primer_piso": render_primer_piso(data, render_params, primer_piso_data),
+            "sotano": render_sotano(data, render_params, sotano_data),
+        }
+
+    # Mantener campo 'renders' para compatibilidad con código anterior
+    # (solo si debug=True, de lo contrario campo vacío para no romper el frontend)
+    if "debug_renders" in response:
+        response["renders"] = response["debug_renders"]
+    else:
+        response["renders"] = {}
+
+    return response
