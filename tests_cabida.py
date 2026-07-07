@@ -481,15 +481,16 @@ def render_png(caso, geometry, normativa, lote_poly, lote_util,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _make_caso(name, frente, fondo, derecha, izquierda, nd,
-               retiro_lat=2.3, retiro_pos=2.3, pisos=7):
+               retiro_lat=2.3, retiro_pos=2.3, pisos=7, expect_inviable=False):
     return dict(name=name, frente=frente, fondo=fondo,
                 derecha=derecha, izquierda=izquierda, nd=nd,
-                retiro_lat=retiro_lat, retiro_pos=retiro_pos, pisos=pisos)
+                retiro_lat=retiro_lat, retiro_pos=retiro_pos, pisos=pisos,
+                expect_inviable=expect_inviable)
 
 
 CASOS = [
     # ── Rectangulares ─────────────────────────────────────
-    _make_caso("R10x25_nd4",   10,  10, 25, 25, 4),
+    _make_caso("R10x25_nd4",   10,  10, 25, 25, 4, expect_inviable=True),
     _make_caso("R13x28_nd4",   13,  13, 28, 28, 4),
     _make_caso("R13x28_nd2",   13,  13, 28, 28, 2),
     _make_caso("R17x34_nd4",   17,  17, 34, 34, 4),
@@ -699,11 +700,28 @@ def main():
         geometry, normativa, lote_poly, lote_util, footprint, metrics_or_err = result
 
         if isinstance(metrics_or_err, str):
-            print(f"ERROR: {metrics_or_err}")
-            table_rows.append({"name": caso["name"], "nd": "ERR", "efi": "ERR",
-                                "circ": "ERR", "hue": "ERR", "acc": "ERR",
-                                "par": "ERR", "score": "0/0",
-                                "pass_n": 0, "total_n": 0})
+            # Caso marcado inviable: PASS si lanzó ValueError con "inviable".
+            if caso.get("expect_inviable") and "inviable" in metrics_or_err.lower():
+                print(f"INVIABLE (esperado): {metrics_or_err[:60]}")
+                table_rows.append({"name": caso["name"], "nd": "INV", "efi": "—",
+                                    "circ": "—", "hue": "—", "acc": "—",
+                                    "par": "—", "score": "1/1",
+                                    "pass_n": 1, "total_n": 1})
+            else:
+                print(f"ERROR: {metrics_or_err}")
+                table_rows.append({"name": caso["name"], "nd": "ERR", "efi": "ERR",
+                                    "circ": "ERR", "hue": "ERR", "acc": "ERR",
+                                    "par": "ERR", "score": "0/0",
+                                    "pass_n": 0, "total_n": 0})
+            continue
+
+        # Caso esperaba inviable pero generó: FAIL explícito.
+        if caso.get("expect_inviable"):
+            print("FAIL: esperaba inviable pero generó geometría")
+            table_rows.append({"name": caso["name"], "nd": "!INV", "efi": "—",
+                                "circ": "—", "hue": "—", "acc": "—",
+                                "par": "—", "score": "0/1",
+                                "pass_n": 0, "total_n": 1})
             continue
 
         metrics = metrics_or_err
