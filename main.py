@@ -6,7 +6,7 @@ listo para consumo por motores WebGL (Three.js) o cualquier otro cliente.
 """
 
 import math
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -4366,7 +4366,10 @@ async def validar_arquitectura(
         except AttributeError:  # pydantic v1
             proyecto_eff = proyecto.copy(update={"numero_pisos": pisos_eff})
 
-        geometry, normativa = _generate_geometry(proyecto_eff)
+        try:
+            geometry, normativa = _generate_geometry(proyecto_eff)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
         primer_piso_data = _generate_primer_piso(proyecto_eff, geometry)
         sotano_data      = _generate_sotano(proyecto_eff, geometry, normativa)
         azotea_data      = _generate_azotea(proyecto_eff, geometry, normativa)

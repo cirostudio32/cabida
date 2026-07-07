@@ -1847,6 +1847,13 @@ const initApp = () => {
 
             const resultado = await response.json();
 
+            if (!response.ok) {
+                const detalle = resultado?.detail || `Error ${response.status}`;
+                alert("No se pudo generar la cabida:\n\n" + detalle);
+                console.warn("Auditoría rechazada:", response.status, detalle);
+                return;
+            }
+
             // Almacenar la respuesta del servidor como fuente de verdad normativa global
             rneResultado = resultado;
 
