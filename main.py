@@ -4444,11 +4444,18 @@ async def validar_arquitectura(
     normativa["clamps"] = clamps_info
 
     # ── Compatibilidad hacia atrás (campos que el JS actual consume) ──
+    # Poda de campos que ningún consumidor (main.js / viewer3d.js) lee:
+    #  - columnas, remanentes_zona_media, esquema_area_libre, pozos_luz_cumple
+    #  - evaluacion: redundante con el campo top-level "diseno" (abajo)
+    _GG_DEAD = {"columnas", "remanentes_zona_media", "esquema_area_libre",
+                "pozos_luz_cumple", "evaluacion"}
+    geometria_generada = {k: v for k, v in geometry.items() if k not in _GG_DEAD}
+
     response = {
         **webgl_payload,
         # Backward-compat fields consumed by the existing main.js
         "status": "Auditoría RNE — Spine & Ribs (WebGL Mode)",
-        "geometria_generada": geometry,
+        "geometria_generada": geometria_generada,
         "normativa_estricta": normativa,
         "primer_piso": primer_piso_data,
         "sotano": sotano_data,
