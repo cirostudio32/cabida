@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Stop-Process -Force -ErrorAction SilentlyContinue)",
+      "PowerShell(Start-Process -FilePath \"C:\\\\Users\\\\gcher\\\\Desktop\\\\Cabida edit\\\\.venv\\\\Scripts\\\\uvicorn.exe\" -ArgumentList \"main:app\",\"--reload\",\"--host\",\"127.0.0.1\",\"--port\",\"8000\" -WorkingDirectory \"C:\\\\Users\\\\gcher\\\\Desktop\\\\Cabida edit\" -WindowStyle Normal)",
+      "PowerShell($api = Invoke-RestMethod -Uri \"http://localhost:8000/openapi.json\"; \\($api.paths | ConvertTo-Json -Depth 1\\).Substring\\(0, 500\\))",
+      "PowerShell($api = Invoke-RestMethod -Uri \"http://localhost:8000/openapi.json\"; \\($api.paths | ConvertTo-Json -Depth 1\\) | Select-String \"/api|/calcul|/generar|/genera\")",
+      "Bash(curl -s -X POST http://localhost:8000/auditoria-rne -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(python -c ' *)",
+      "Bash(curl -s -X POST http://localhost:8000/generar-cabida -H \"Content-Type: application/json\" -d \"{\\\\\"coordenadas_lote\\\\\": [[-10.5,0],[10.5,0],[7.65,32.1],[-7.65,29.2]], \\\\\"area_bruta_terreno\\\\\": 600, \\\\\"numero_pisos\\\\\": 6, \\\\\"retiro_frontal\\\\\": 3, \\\\\"zonificacion\\\\\": \\\\\"RDM\\\\\", \\\\\"num_ascensores\\\\\": 1, \\\\\"num_departamentos\\\\\": 8, \\\\\"ciego_izquierda\\\\\": true, \\\\\"ciego_derecha\\\\\": true}\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d['detail'][:300]\\)\")",
+      "Bash(\".venv/Scripts/uvicorn.exe\" main:app --host 0.0.0.0 --port 8001 --reload)",
+      "Bash(curl -s http://localhost:8001/)",
+      "Bash(python -m uvicorn main:app --reload --port 8001 --host 0.0.0.0)"
+    ]
+  }
+}

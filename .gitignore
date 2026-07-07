@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Test / build artifacts
+_tests_out/
+
+# Logs
+*.log
+
+# OS
+Thumbs.db
+.DS_Store
