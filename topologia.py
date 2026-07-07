@@ -135,7 +135,6 @@ def seleccionar_topologia(metricas: Dict[str, Any]) -> Dict[str, Any]:
         "confianza": score,
         "motivo": motivo,
         "implementada_actualmente": nombre in implementadas,
-        "estrategia_usada": nombre if nombre in implementadas else "spine",
         "alternativas": [
             {"nombre": n, "score": s, "motivo": m}
             for n, s, m in candidatos[1:]
