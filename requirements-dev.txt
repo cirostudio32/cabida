@@ -1,0 +1,7 @@
+-r requirements.txt
+
+# Solo para tests / scripts DXF (no los usa el servidor)
+matplotlib
+numpy
+ezdxf
+requests

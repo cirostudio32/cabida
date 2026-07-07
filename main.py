@@ -58,6 +58,8 @@ from validators import validar_unidad, EVAC_MAX_M
 from topologia import informe_topologia, find_main_rect, analizar_lote, seleccionar_topologia
 
 app = FastAPI()
+# CORS abierto: el frontend Netlify llama a este backend (Render) cross-origin.
+# API read-only sin datos sensibles. Si se restringe, añadir el dominio Netlify.
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

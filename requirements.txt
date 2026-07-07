@@ -1,6 +1,5 @@
+# Runtime del servidor (motor de cabida)
 fastapi
 uvicorn
 pydantic
 shapely
-matplotlib
-numpy

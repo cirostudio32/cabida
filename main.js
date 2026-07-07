@@ -1,4 +1,4 @@
-import { Viewer3D } from './viewer3d.js?v=20260611a';
+import { Viewer3D } from './viewer3d.js?v=20260706a';
 
 const initApp = () => {
     // --- API Configuration ---
