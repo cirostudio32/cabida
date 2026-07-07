@@ -72,7 +72,6 @@ const initApp = () => {
     let smallDuctos = [];
     let patioPoly = [];
     let vestibuloPoly = []; // Vestíbulo previo ventilado (escalera presurizada)
-    let rampaPoly = []; // Rampa vehicular primer piso
 
     const numAscensoresInput = document.getElementById("num-ascensores");
 
@@ -762,9 +761,6 @@ const initApp = () => {
     }
 
     // --- FASE 2: Generación del Núcleo de Circulación Vertical ---
-    let comercioPoly = [], serviciosPoly = [], lobbyPoly = [];
-    let parkingBoxes = [];
-    let reqEstac = 0;
 
     function buildBasePolygons(dptos) {
         // 1. LIMPIEZA QUIRÚRGICA
@@ -798,266 +794,6 @@ const initApp = () => {
             });
         }
     }
-    function generatePrimerPiso() {
-        let buildPoly = loteNetoPoly.length > 0 ? loteNetoPoly : techadaPoly;
-        let bW = Math.max(1, calculatePolyWidth(buildPoly));
-        let bD = Math.max(1, calculatePolyHeight(buildPoly));
-        comercioPoly = []; serviciosPoly = []; lobbyPoly = [];
-        rampaPoly = [];
-
-        // Rampa vehicular: 3.00m ancho, longitud 20.00m (para pendiente max 15%)
-        let rampaW = 3.00 / bW;
-        let rampaD = Math.min(1.0, 20.00 / bD);
-        rampaPoly = getCell(buildPoly, 0, rampaW, 0, rampaD);
-
-        // Lobby: centrado con nucleo
-        let uLobbyStart = 0.38, uLobbyEnd = 0.62;
-        if (corePoly.length > 0) {
-            let cU = 0.5;
-            uLobbyStart = Math.max(rampaW + 0.02, cU - 0.12);
-            uLobbyEnd = Math.min(1.0, cU + 0.12);
-        }
-
-        // Servicios: SSHH/Basura
-        serviciosPoly = getCell(buildPoly, 0, rampaW, rampaD + 0.01, rampaD + 0.16);
-
-        // Lobby principal
-        lobbyPoly = getCell(buildPoly, uLobbyStart, uLobbyEnd, 0, 0.3);
-
-        // Comercio a los lados
-        let com1 = getCell(buildPoly, rampaW + 0.01, uLobbyStart, 0, 0.3);
-        let com2 = getCell(buildPoly, uLobbyEnd, 1.0, 0, 0.3);
-        comercioPoly = [com1, com2];
-    }
-
-    function getTurfArea(tFeature) {
-        if (!tFeature) return 0;
-        let geom = tFeature.geometry || tFeature;
-        if (!geom || !geom.coordinates) return 0;
-        let getArea = (rings) => {
-            let a = calculatePolyArea(rings[0].map(pt => ({ x: pt[0], y: pt[1] })).slice(0, -1));
-            for (let i = 1; i < rings.length; i++) a -= calculatePolyArea(rings[i].map(pt => ({ x: pt[0], y: pt[1] })).slice(0, -1));
-            return a;
-        };
-        if (geom.type === 'Polygon') return getArea(geom.coordinates);
-        if (geom.type === 'MultiPolygon') {
-            let a = 0;
-            for (let c of geom.coordinates) a += getArea(c);
-            return a;
-        }
-        return 0;
-    }
-
-    function generateSotano() {
-        parkingBoxes = []; sotanoLevels = [];
-        let totalDptosEdificio = apartments.length * params.pisos;
-        reqEstac = Math.ceil(totalDptosEdificio * (params.pctEstac / 100));
-
-        // Ancho de cajón de estacionamiento desde Python (RNE: 2.70m individual)
-        let stallW_rne = rneResultado?.normativa_estricta?.estacionamiento_ancho || 2.50;
-
-        calcCisterna();
-        if (reqEstac === 0 && cisternaData.total === 0) return;
-
-        let turfLot = polyToTurf(polygon);
-        let sotanoLimitTurf = turfLot;
-        try { let buf = turf.buffer(turfLot, -0.30, { units: 'meters' }); if (buf) sotanoLimitTurf = buf; } catch (e) { }
-        let sotanoLimitPoly = turfToPoly(sotanoLimitTurf);
-
-        let turfRampa = rampaPoly.length > 0 ? polyToTurf(rampaPoly) : null;
-
-        // 2. PERFORACIÓN COMPLETA DE SÓTANOS: Consolidar todo el núcleo (Core + Esc + Asc + Vestíbulo)
-        let turfCore = null;
-        let coreElements = [corePoly, ascensorPoly, escaleraPoly, vestibuloPoly];
-        for (let el of coreElements) {
-            if (el && el.length > 0) {
-                let currentTurf = polyToTurf(el);
-                if (currentTurf) {
-                    if (!turfCore) turfCore = currentTurf;
-                    else {
-                        try {
-                            let merged = turf.union(turfCore, currentTurf);
-                            if (merged) turfCore = merged;
-                        } catch (e) { }
-                    }
-                }
-            }
-        }
-
-        let bbExtents = turf.bbox(sotanoLimitTurf);
-
-        let cistCellsContent = [];
-        let actualCistTurf = null;
-        if (cisternaData.total > 0) {
-            let areaDomA = (cisternaData.domestico / 2) / 2.5;
-            let areaDomB = (cisternaData.domestico / 2) / 2.5;
-            let areaACI = cisternaData.aci / 2.5;
-            let areaMaq = cisternaData.cuartoMaq;
-            let totalCistArea = areaDomA + areaDomB + areaACI + areaMaq;
-
-            let availCist = sotanoLimitTurf;
-            if (turfRampa) try { let sub = turf.difference(availCist, turfRampa); if (sub) availCist = sub; } catch (e) { }
-            if (turfCore) try { let sub = turf.difference(availCist, turfCore); if (sub) availCist = sub; } catch (e) { }
-
-            let minX = bbExtents[0], maxX = bbExtents[2];
-            let minY = bbExtents[1], maxY = bbExtents[3];
-
-            // Cistern placement: sweep Y from bottom to top covering full width
-            let sweepMinY = minY;
-            let sweepMaxY = maxY;
-            let cistMinY = maxY;
-            for (let i = 0; i < 15; i++) {
-                let midY = (sweepMinY + sweepMaxY) / 2;
-                let box = turf.bboxPolygon([minX, midY, maxX, maxY]);
-                let clipped = turf.intersect(availCist, box);
-                let a = getTurfArea(clipped);
-                actualCistTurf = clipped;
-                if (a < totalCistArea) sweepMaxY = midY; // Need more area, move UP (smaller Y)
-                else sweepMinY = midY; // Need less area, move DOWN (larger Y)
-            }
-            cistMinY = (sweepMinY + sweepMaxY) / 2;
-
-            // Subdivide actualCistTurf along Y axis for the 4 zones
-            if (actualCistTurf) {
-                let currentY = cistMinY;
-                let sliceY = (reqArea) => {
-                    let s_minY = currentY;
-                    let s_maxY = maxY;
-                    let bestC = null;
-                    for (let i = 0; i < 12; i++) {
-                        let midY = (s_minY + s_maxY) / 2;
-                        let box = turf.bboxPolygon([minX, currentY, maxX, midY]);
-                        let c = turf.intersect(actualCistTurf, box);
-                        let a = getTurfArea(c);
-                        if (c) bestC = c;
-                        if (a < reqArea) s_minY = midY;
-                        else s_maxY = midY;
-                    }
-                    currentY = (s_minY + s_maxY) / 2;
-                    return bestC;
-                };
-
-                let cellA = sliceY(areaDomA);
-                let cellB = sliceY(areaDomB);
-                let cellACI = sliceY(areaACI);
-                let boxRest = turf.bboxPolygon([minX, currentY, maxX, maxY]);
-                let cellMaq = turf.intersect(actualCistTurf, boxRest);
-
-                cistCellsContent = [
-                    { t: cellA, col: '#bfdbfe', str: '#2563eb', text: `CIST. CONS. A\n${(cisternaData.domestico / 2).toFixed(1)} m³` },
-                    { t: cellB, col: '#93c5fd', str: '#1d4ed8', text: `CIST. CONS. B\n${(cisternaData.domestico / 2).toFixed(1)} m³` },
-                    { t: cellACI, col: '#fca5a5', str: '#dc2626', text: `CIST. ACI\n${cisternaData.aci.toFixed(1)} m³` },
-                    { t: cellMaq, col: '#fef3c7', str: '#d97706', text: `CTO. MÁQ.\n${cisternaData.cuartoMaq.toFixed(1)} m²` }
-                ];
-            }
-        }
-
-        let stallW = stallW_rne, stallD = 5.00, aisleW = 6.00;
-        let moduleD = stallD + aisleW + stallD;
-
-        let remaining = reqEstac;
-        let levelNum = 0;
-        let stallGlobal = 1;
-        let maxLevels = remaining === 0 ? 1 : 15;
-
-        // Optimization: dynamic Y start to avoid overlapping with corner cisterns initially? No, the checkValid handles it.
-        while ((remaining > 0 || levelNum === 0) && levelNum < maxLevels) {
-            levelNum++;
-            let levelStalls = [];
-            let placed = 0;
-
-            let checkValid = (poly) => {
-                let tp = polyToTurf(poly);
-                if (!tp) return false;
-                if (!turf.booleanContains(sotanoLimitTurf, tp)) return false;
-                if (turfRampa && turf.booleanOverlap(tp, turfRampa)) return false;
-                if (turfCore && turf.booleanOverlap(tp, turfCore)) return false;
-                // On the last level, we check cisterns
-                if (actualCistTurf && turf.booleanOverlap(tp, actualCistTurf)) return false;
-                return true;
-            };
-
-            let startY = bbExtents[1];
-            while (startY + stallD <= bbExtents[3] && reqEstac > 0 && remaining > 0) {
-                let startX = bbExtents[0];
-                let rowTopFits = false;
-                let aisleY = startY + stallD;
-                // Try top row of stalls
-                while (startX + stallW <= bbExtents[2]) {
-                    let topStall = [{ x: startX, y: startY }, { x: startX + stallW, y: startY }, { x: startX + stallW, y: startY + stallD }, { x: startX, y: startY + stallD }];
-                    if (checkValid(topStall)) {
-                        levelStalls.push({ id: `E-${String(stallGlobal).padStart(2, '0')}`, poly: topStall });
-                        stallGlobal++; remaining--; placed++; rowTopFits = true;
-                    }
-                    startX += stallW;
-                }
-
-                if (rowTopFits && reqEstac > 0 && remaining > 0) {
-                    let aislePoly = [{ x: bbExtents[0], y: aisleY }, { x: bbExtents[2], y: aisleY }, { x: bbExtents[2], y: aisleY + aisleW }, { x: bbExtents[0], y: aisleY + aisleW }];
-                    try { let tAisle = polyToTurf(aislePoly); let clipped = turf.intersect(sotanoLimitTurf, tAisle); if (clipped) levelStalls.push({ id: 'AISLE', poly: turfToPoly(clipped) }); } catch (e) { }
-                    startY = aisleY + aisleW; // Advance past Aisle
-
-                    // Try bottom row sharing the aisle
-                    let rowBotFits = false;
-                    startX = bbExtents[0];
-                    while (startX + stallW <= bbExtents[2]) {
-                        let botStall = [{ x: startX, y: startY }, { x: startX + stallW, y: startY }, { x: startX + stallW, y: startY + stallD }, { x: startX, y: startY + stallD }];
-                        if (checkValid(botStall)) {
-                            levelStalls.push({ id: `E-${String(stallGlobal).padStart(2, '0')}`, poly: botStall });
-                            stallGlobal++; remaining--; placed++; rowBotFits = true;
-                        }
-                        startX += stallW;
-                    }
-                    if (rowBotFits) {
-                        startY += stallD; // Advance past Bot Row
-                    }
-                } else {
-                    startY += 1.0; // Advance slowly until we find a full fit line
-                }
-            }
-
-            let slabTurf = sotanoLimitTurf;
-            if (turfRampa) { try { let sub = turf.difference(slabTurf, turfRampa); if (sub) slabTurf = sub; } catch (e) { } }
-
-            sotanoLevels.push({
-                name: `S${levelNum}`,
-                stalls: levelStalls.filter(s => s.id !== 'AISLE'),
-                aisles: levelStalls.filter(s => s.id === 'AISLE'),
-                count: placed,
-                slab: turfToPoly(slabTurf),
-                baseLimit: sotanoLimitPoly,
-                extents: bbExtents,
-                cistCellsContent: cistCellsContent
-            });
-
-            if (reqEstac > 0 && placed === 0) break;
-        }
-    }
-
-    let cisternaData = { domestico: 0, aci: 50, total: 0, cuartoMaq: 0 };
-
-    function calcCisterna() {
-        // Dotaciones dinámicas desde Python (litros → m³)
-        const dot = rneResultado?.normativa_estricta?.dotaciones;
-        const agua_1d = dot ? dot.agua_1d / 1000 : 0.50;   // 500L → 0.50 m³
-        const agua_2d = dot ? dot.agua_2d / 1000 : 0.85;   // 850L → 0.85 m³
-        const agua_3d = dot ? dot.agua_3d / 1000 : 1.20;   // 1200L → 1.20 m³
-        const aci_m3 = dot ? dot.aci_m3 : 25;     // 25 m³
-
-        let dom = 0;
-        apartments.forEach(ap => {
-            let m3 = agua_3d;
-            if (ap.typology === '1D') m3 = agua_1d;
-            else if (ap.typology === '1D+E' || ap.typology === '2D') m3 = agua_2d;
-            dom += m3 * params.pisos;
-        });
-        cisternaData.domestico = dom;
-        cisternaData.aci = aci_m3;
-        cisternaData.total = cisternaData.domestico + cisternaData.aci;
-        cisternaData.cuartoMaq = Math.max(15, cisternaData.total * 0.12);
-    }
-
-    let sotanoLevels = [];
 
     function processGeometryAndCheckHabitability(dptosToTry) {
         let totalVendible = 0;
@@ -1239,8 +975,6 @@ const initApp = () => {
             if (allConnected) break;
         }
 
-        generatePrimerPiso();
-        generateSotano();
         updateTables();
         updateCompliancePanel();
     }
@@ -1269,17 +1003,17 @@ const initApp = () => {
         let cumplePozoDorm = patioMinDim >= reqDorm;
         let cumplePozoSala = patioMinDim >= reqSala;
 
-        // 3. Estacionamientos
+        // 3. Estacionamientos (fuente única: sótano del backend)
+        let sot = window.webglPayload?.sotano || {};
         let totalDptos = apartments.length * params.pisos;
-        let estReq = Math.ceil(totalDptos * (params.pctEstac / 100));
-        let estLogrados = 0;
-        sotanoLevels.forEach(lv => estLogrados += lv.count);
+        let estReq = sot.req_estac ?? Math.ceil(totalDptos * (params.pctEstac / 100));
+        let estLogrados = sot.count || 0;
         let cumpleEst = estLogrados >= estReq;
 
-        // 4. Cisterna
-        let volDom = cisternaData.domestico;
-        let volACI = cisternaData.aci;
-        let volTotal = cisternaData.total;
+        // 4. Cisterna (backend)
+        let volDom = sot.cisterna_domestico || 0;
+        let volACI = sot.cisterna_aci || 0;
+        let volTotal = sot.cisterna_total_m3 || 0;
 
         // 5. Conectividad (acceso al hall/core/escalera)
         // The Spine & Ribs algorithm places all apartments fronting the hall corridor.
@@ -1354,7 +1088,7 @@ const initApp = () => {
         html += row('A.010 Art.65 — Estacionamientos',
             `${estLogrados} logrados vs ${estReq} requeridos`,
             cumpleEst,
-            `${sotanoLevels.length} nivel(es) de sótano`);
+            `Sótano ${sot.name || 'S1'}`);
 
         let cab = rneResultado?.geometria_generada?.cabida_multifamiliar;
         if (cab) {
@@ -1386,7 +1120,7 @@ const initApp = () => {
         html += row('IS.010 / A.130 — Cisterna',
             `${volTotal.toFixed(1)} m³ total`,
             true,
-            `Consumo: ${volDom.toFixed(1)} m³ / ACI: ${volACI.toFixed(0)} m³ / Bombas: ${cisternaData.cuartoMaq.toFixed(0)} m²`);
+            `Consumo: ${volDom.toFixed(1)} m³ / ACI: ${volACI.toFixed(0)} m³ / Bombas: ${(sot.cisterna_maq || 0).toFixed(0)} m²`);
 
         html += '</div>';
         panel.innerHTML = html;
@@ -1980,8 +1714,6 @@ const initApp = () => {
                 calc.cumple25m = true;
 
                 processGeometryAndCheckHabitability(apartments.length);
-                generatePrimerPiso();
-                generateSotano();
                 updateTables();
                 updateCompliancePanel();
                 updateNormaCheckPanel(resultado);
@@ -2065,11 +1797,10 @@ const initApp = () => {
             let isSotano = viewportLevelSelect.value === 'sotano';
             if (sotanoLevelSelect) {
                 sotanoLevelSelect.style.display = isSotano ? 'inline-block' : 'none';
-                if (isSotano && sotanoLevels.length > 0) {
-                    sotanoLevelSelect.innerHTML = '';
-                    sotanoLevels.forEach((lv, i) => {
-                        sotanoLevelSelect.innerHTML += `<option value="${i}">${lv.name} (${lv.count} est.)</option>`;
-                    });
+                const sot = window.webglPayload?.sotano;
+                if (isSotano && sot) {
+                    sotanoLevelSelect.innerHTML =
+                        `<option value="0">${sot.name || 'S1'} (${sot.count || 0} est.)</option>`;
                 }
             }
         });

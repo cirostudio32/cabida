@@ -4167,6 +4167,7 @@ def _build_webgl_payload(
     }
 
     sotano_norm = {
+        "name": sotano.get("name", "S1"),
         "slab": norm(sotano.get("slab", [])),
         "stalls": stalls_norm,
         "aisles": aisles_norm,
