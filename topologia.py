@@ -8,8 +8,8 @@ Analiza la forma del lote y recomienda la topología arquitectónica adecuada:
   - L_plan     : planta en L (lotes esquineros)
   - irregular   : fallback (lotes complejos)
 
-Por ahora solo `spine` está implementada en main._generate_geometry.
-El resto se expone como recomendación para iteraciones futuras.
+Implementadas en main._generate_geometry: spine, claustro, tower,
+hall_compacto. L_plan e irregular caen a spine (fallback).
 """
 
 import math

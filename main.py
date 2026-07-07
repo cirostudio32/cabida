@@ -8,8 +8,7 @@ listo para consumo por motores WebGL (Three.js) o cualquier otro cliente.
 import math
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 import os
 from pydantic import BaseModel
 from typing import List, Tuple, Optional, Dict, Any
@@ -298,22 +297,6 @@ def poly_to_js(sp) -> list:
     return pts
 
 
-def poly_to_coords(sp) -> list:
-    """Shapely Polygon → [[x,y], …] normalized coords."""
-    if sp is None or sp.is_empty:
-        return []
-    if sp.geom_type == "MultiPolygon":
-        sp = max(sp.geoms, key=lambda g: g.area)
-    return [[r3(x), r3(y)] for x, y in list(sp.exterior.coords)[:-1]]
-
-
-def pts_to_coords(pts: list) -> list:
-    """[{x,y},...] → [[x,y],...] rounded."""
-    if not pts:
-        return []
-    return [[r3(p["x"]), r3(p["y"])] for p in pts]
-
-
 def safe_clip(poly, boundary):
     def _pick_poly(r):
         if r.is_empty:
@@ -357,16 +340,8 @@ def _get_cell(quad, u1, u2, v1, v2):
     return [_gp(u1, v1), _gp(u2, v1), _gp(u2, v2), _gp(u1, v2)]
 
 
-def _calculate_poly_area(poly):
-    n = len(poly)
-    if n < 3:
-        return 0
-    area = 0
-    for i in range(n):
-        j = (i + 1) % n
-        area += poly[i]["x"] * poly[j]["y"]
-        area -= poly[j]["x"] * poly[i]["y"]
-    return abs(area) / 2
+# Alias: misma fórmula shoelace que calc_poly_area (unificado).
+_calculate_poly_area = calc_poly_area
 
 
 def _poly_width(poly):
@@ -388,11 +363,6 @@ def _centroid(pts: list) -> list:
         cx = sum(p[0] for p in pts) / len(pts)
         cy = sum(p[1] for p in pts) / len(pts)
     return [r3(cx), r3(cy)]
-
-
-def _normalize_coords(coords: list, offset_x: float, offset_y: float) -> list:
-    """Offset all [[x,y],...] points by (-offset_x, -offset_y)."""
-    return [[r3(p[0] - offset_x), r3(p[1] - offset_y)] for p in coords]
 
 
 def _strip_segments_for_apartments(
