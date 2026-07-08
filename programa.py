@@ -25,6 +25,7 @@ import math
 from typing import Tuple, Optional, Dict, Any, List
 
 from shapely.geometry import Polygon
+from shapely.ops import unary_union
 
 
 # Área mínima por habitación para emitir el polígono (filtro de ruido geométrico)
@@ -230,19 +231,42 @@ def generate_interior_zones(
         rooms = banda["rooms"]
         total_area = sum(r["area"] for r in rooms) or 1.0
 
+        # G4: huella real de la banda completa ANTES de repartir habitaciones.
+        # El reparto por fracción de ancho asume rectángulo ideal; si el
+        # núcleo/pozo muerde una banda con forma irregular, un cuarto puede
+        # caer entero en la zona mordida y desaparecer en silencio (H2). Aquí
+        # se detecta ese sobrante real (banda − lo asignado) y se dona al
+        # cuarto más cercano de la misma banda, en vez de perderlo.
+        banda_quad = strip_cell_polygon(corners, 0.0, 1.0, t_prev, t_end)
+        banda_real = clip_zone_polygon(banda_quad, unit_poly, lot)
+
         u_prev = 0.0
+        banda_out: List[Dict[str, Any]] = []
         for i, room in enumerate(rooms):
             w_frac = room["area"] / total_area
             u_end = 1.0 if i == len(rooms) - 1 else min(1.0, u_prev + w_frac)
             quad = strip_cell_polygon(corners, u_prev, u_end, t_prev, t_end)
             geom = clip_zone_polygon(quad, unit_poly, lot)
             if geom is not None:
-                out.append({
+                banda_out.append({
                     "nombre": room["nombre"],
                     "geom": geom,
                     "kind": kind,
                 })
             u_prev = u_end
+
+        if banda_real is not None and banda_out:
+            asignado = unary_union([r["geom"] for r in banda_out])
+            sobrante = banda_real.difference(asignado.buffer(0.01))
+            if not sobrante.is_empty:
+                piezas = [sobrante] if sobrante.geom_type == "Polygon" else list(sobrante.geoms)
+                for pieza in piezas:
+                    if pieza.area < 0.1:
+                        continue
+                    nearest = min(banda_out, key=lambda r: r["geom"].distance(pieza))
+                    nearest["geom"] = nearest["geom"].union(pieza).buffer(0.0)
+
+        out.extend(banda_out)
         t_prev = t_end
 
     return out
