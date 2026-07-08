@@ -87,7 +87,9 @@ async def serve_viewer3d_js():
 # ═══════════════════════════════════════════════════════════════
 RNE = {
     "departamentos": {"min_multifamiliar": 40.0, "min_unipersonal": 16.0, "h_libre": 2.30},
-    "pozos_luz": {"min_abs": 2.10, "ratio_dorm": 0.25},
+    # RNE A.010: pozos que ventilan dormitorios exigen lado ≥ H/3 (no H/4 —
+    # esa fracción es solo para pozos que sirven ambientes de servicio).
+    "pozos_luz": {"min_abs": 2.20, "ratio_dorm": 1 / 3, "ratio_serv": 0.25},
     "circulacion_h": {"hall_ancho": 1.20, "interior": 0.90},
     "circulacion_v": {
         "esc_ancho": 1.20, "esc_largo": 5.60,
@@ -2026,7 +2028,7 @@ def _generate_hall_compacto(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
 # ═══════════════════════════════════════════════════════════════
 
 def _evaluar_diseno(geometry: dict, lote_poly: Polygon, r_lat: float, r_pos: float,
-                    num_dptos: int) -> dict:
+                    num_dptos: int, pozo_req: float = 0.0) -> dict:
     """Evalúa el diseño generado con las mismas métricas que el arnés.
     Retorna {"score": 0-100, "defectos": [...], "metricas": {...}}.
     'defectos' = lista de dicts con {tipo, severidad, descripcion}.
@@ -2212,6 +2214,27 @@ def _evaluar_diseno(geometry: dict, lote_poly: Polygon, r_lat: float, r_pos: flo
         defectos.append({"tipo": "acceso", "severidad": sevv,
                          "descripcion": f"Acceso {acc_ok}/{len(dptos)} dptos ({acc_pct}%)"})
 
+    # ── Pozos de luz: lado ≥ H/3 si sirven dormitorios (RNE A.010) ──
+    pozos_luz = geometry.get("pozos_luz", [])
+    pozos_bajo_norma = 0
+    for pz in pozos_luz:
+        if not pz or len(pz) < 3:
+            continue
+        try:
+            pxs = [c["x"] if isinstance(c, dict) else c[0] for c in pz]
+            pys = [c["y"] if isinstance(c, dict) else c[1] for c in pz]
+            lado_min = min(max(pxs) - min(pxs), max(pys) - min(pys))
+            if pozo_req > 0 and lado_min + 1e-6 < pozo_req:
+                pozos_bajo_norma += 1
+        except Exception:
+            pass
+    metricas["pozos_bajo_norma"] = pozos_bajo_norma
+    metricas["pozo_req_m"] = round(pozo_req, 2)
+    if pozos_bajo_norma > 0:
+        defectos.append({"tipo": "pozo_luz", "severidad": "menor",
+                         "descripcion": f"{pozos_bajo_norma} pozo(s) < {pozo_req:.2f}m "
+                                        f"(RNE H/3 para dormitorios) — lote no da el ancho requerido"})
+
     # ── Score ──────────────────────────────────────────────────
     s = 0
     # nd_delta: 25 pts  (Δ0=25, Δ1=20, Δ2=12 crédito parcial, Δ≥3=0)
@@ -2317,7 +2340,7 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
         """Adjunta evaluación E5 al geometry dict y retorna."""
         n["ascensor_forzado"] = ascensor_forzado
         try:
-            g["evaluacion"] = _evaluar_diseno(g, lote, _r_lat_ev, _r_pos_ev, _nd_req)
+            g["evaluacion"] = _evaluar_diseno(g, lote, _r_lat_ev, _r_pos_ev, _nd_req, pozo_final)
         except Exception:
             g["evaluacion"] = {"score": 0, "defectos": [], "n_criticos": 0, "metricas": {}}
         return g, n
@@ -3449,7 +3472,7 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
     # E5: evaluación interna (spine fallback path)
     try:
         geometry["evaluacion"] = _evaluar_diseno(
-            geometry, lote, _r_lat_ev, _r_pos_ev, _nd_req)
+            geometry, lote, _r_lat_ev, _r_pos_ev, _nd_req, pozo_final)
     except Exception:
         geometry["evaluacion"] = {"score": 0, "defectos": [], "n_criticos": 0, "metricas": {}}
     return geometry, normativa
