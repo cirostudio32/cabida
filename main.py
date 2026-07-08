@@ -1276,14 +1276,20 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
     core_items = [stair_poly] + asc_polys
     core_clipped = safe_clip(unary_union(core_items).envelope, lote_util)
 
-    # ── Hall: corredor central + ensanche frente a ascensores ──
+    # ── Hall: corredor central + ensanche frente a escalera Y ascensores
+    # (G3 — nodo distribuidor en ambos frentes de núcleo, no solo pasillo;
+    # dimensionado por nuc_l_h/nuc_r_h reales, válido para cualquier lote) ──
     hall_parts = [Polygon([(ucl, yf0), (ucr, yf0), (ucr, yb0), (ucl, yb0)])]
+    _ens_l = min(nuc_l_h + 0.8, Dm)
+    hall_parts.append(Polygon([
+        (ucl - 0.70, yf0), (ucl, yf0),
+        (ucl, yf0 + _ens_l), (ucl - 0.70, yf0 + _ens_l),
+    ]))
     if num_asc > 0:
-        # ensanche de hall frente a los ascensores (≥1.5m libre RNE)
-        _ens_h = nuc_r_h + 0.8
+        _ens_r = min(nuc_r_h + 0.8, Dm)
         hall_parts.append(Polygon([
-            (ucl - 0.70, yf0), (ucl, yf0),
-            (ucl, yf0 + min(_ens_h, Dm)), (ucl - 0.70, yf0 + min(_ens_h, Dm)),
+            (ucr, yf0), (ucr + 0.70, yf0),
+            (ucr + 0.70, yf0 + _ens_r), (ucr, yf0 + _ens_r),
         ]))
     hall_clipped = safe_clip(unary_union(hall_parts), lote_util)
     hall_buf = hall_clipped.buffer(0.40) if hall_clipped and not hall_clipped.is_empty else None
