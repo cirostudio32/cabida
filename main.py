@@ -1332,24 +1332,15 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
             "fachada": bool(proyecto.fondo_exterior) or patio_depth >= 2.5,
         })
 
-    # ── Franjas de pozo en medianeras: largas (recortan esquinas de bloques,
-    # patrón ref 9) SOLO en el lado con filas que necesitan luz; cortas
-    # (zona media ± solape) en el lado sin filas ──
+    # ── Franjas de pozo en medianeras: acotadas SOLO a las filas intermedias
+    # que ventilan (zona media ± solape) — nunca invaden bloques frente/fondo,
+    # que ventilan a calle/patio y no requieren pozo lateral (G1, RNE A.010:
+    # el pozo se dimensiona frente a los ambientes que sirve, no de punta a punta) ──
     pozos_final, cumple_final = [], []
-    _fv0_long = ya + min(2.0, Df * 0.30)
-    _fv1_long = y_end - min(2.0, Db * 0.30) if Db > 0 else yb0 + _solape
-    if filas_l > 0:
-        franja_izq = Polygon([(xa, _fv0_long), (xa + fz, _fv0_long),
-                              (xa + fz, _fv1_long), (xa, _fv1_long)])
-    else:
-        franja_izq = Polygon([(xa, yf0 - _solape), (xa + fz, yf0 - _solape),
-                              (xa + fz, yb0 + _solape), (xa, yb0 + _solape)])
-    if filas_r > 0:
-        franja_der = Polygon([(xb - fz, _fv0_long), (xb, _fv0_long),
-                              (xb, _fv1_long), (xb - fz, _fv1_long)])
-    else:
-        franja_der = Polygon([(xb - fz, yf0 - _solape), (xb, yf0 - _solape),
-                              (xb, yb0 + _solape), (xb - fz, yb0 + _solape)])
+    franja_izq = Polygon([(xa, yf0 - _solape), (xa + fz, yf0 - _solape),
+                          (xa + fz, yb0 + _solape), (xa, yb0 + _solape)])
+    franja_der = Polygon([(xb - fz, yf0 - _solape), (xb, yf0 - _solape),
+                          (xb, yb0 + _solape), (xb - fz, yb0 + _solape)])
     for fp_raw in (franja_izq, franja_der):
         fp = safe_clip(fp_raw, lote_util)
         if fp is not None and not fp.is_empty and fp.area > 0.5:
