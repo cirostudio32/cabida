@@ -103,6 +103,70 @@ RNE = {
     "altura_piso": 2.80,
 }
 
+# ═══════════════════════════════════════════════════════════════
+# NUEVO CRÉDITO MIVIVIENDA (Fondo Mivivienda) — topes referenciales.
+# Valores en soles, indexados a UIT/decreto y actualizados ~anualmente por
+# el Fondo Mivivienda. VERIFICAR VIGENCIA antes de comercializar: estos son
+# valores de referencia (2024-2025), no una fuente normativa consultada en
+# vivo por este motor.
+# ═══════════════════════════════════════════════════════════════
+MIVIVIENDA_TOPES_SOLES = {
+    "rango1": 91_700.0,
+    "rango2": 141_000.0,
+    "rango3": 232_000.0,
+    "rango4": 415_300.0,
+}
+MIVIVIENDA_AREA_MIN_M2 = 40.0  # Reglamento Operativo Mivivienda + RNE A.010
+
+
+def _check_mivivienda(proyecto: "ProyectoInmobiliario", unidades_meta: list) -> Optional[dict]:
+    """Checklist Mivivienda: área mínima + rango de precio por unidad
+    (requiere proyecto.precios_tipologia en soles/m² para el precio;
+    sin esos datos solo evalúa área mínima)."""
+    if not getattr(proyecto, "acogido_mivivienda", False):
+        return None
+    precios = proyecto.precios_tipologia or {}
+    detalle = []
+    n_bajo_area = n_sin_precio = n_sobre_tope = 0
+    for u in unidades_meta:
+        area = u.get("area", 0.0)
+        tip = u.get("tipologia", "")
+        cumple_area = area >= MIVIVIENDA_AREA_MIN_M2
+        if not cumple_area:
+            n_bajo_area += 1
+        precio_m2 = precios.get(tip)
+        precio_total = rango = cumple_precio = None
+        if precio_m2:
+            precio_total = round(area * precio_m2, 2)
+            for r, tope in MIVIVIENDA_TOPES_SOLES.items():
+                if precio_total <= tope:
+                    rango = r
+                    break
+            cumple_precio = rango is not None
+            if not cumple_precio:
+                n_sobre_tope += 1
+        else:
+            n_sin_precio += 1
+        detalle.append({
+            "tipologia": tip, "area": area,
+            "cumple_area_min": cumple_area,
+            "precio_total_estimado_soles": precio_total,
+            "rango_mivivienda": rango,
+            "cumple_precio": cumple_precio,
+        })
+    return {
+        "aplica": True,
+        "area_min_m2": MIVIVIENDA_AREA_MIN_M2,
+        "topes_referenciales_soles": MIVIVIENDA_TOPES_SOLES,
+        "nota": "Topes de precio referenciales — verificar decreto/UIT vigente del Fondo Mivivienda antes de comercializar.",
+        "detalle_unidades": detalle,
+        "n_unidades": len(detalle),
+        "n_bajo_area_min": n_bajo_area,
+        "n_sin_precio_definido": n_sin_precio,
+        "n_sobre_tope_precio": n_sobre_tope,
+        "cumple_global": n_bajo_area == 0 and n_sobre_tope == 0,
+    }
+
 
 class ProyectoInmobiliario(BaseModel):
     coordenadas_lote: List[Tuple[float, float]]
@@ -143,6 +207,10 @@ class ProyectoInmobiliario(BaseModel):
     # True = reducir pisos automáticamente hasta cumplir altura/CUS/densidad.
     # False (default) = respetar los pisos solicitados y reportar incumplimientos.
     ajustar_pisos_normativa: Optional[bool] = False
+    # Proyecto acogido al Nuevo Crédito Mivivienda (Fondo Mivivienda) →
+    # activa mivivienda_check en la respuesta (área mín. y rango de precio
+    # por unidad, usando precios_tipologia si se proveyó).
+    acogido_mivivienda: Optional[bool] = False
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -4692,6 +4760,14 @@ async def validar_arquitectura(
     }
     normativa["zonificacion_check"] = zon_check
     normativa["clamps"] = clamps_info
+
+    # ── Mivivienda: área mín. + rango de precio por unidad (opt-in) ──
+    mivivienda_check = _check_mivivienda(
+        proyecto, [u["metadata"] for u in webgl_payload["geometria"]["unidades"]]
+    )
+    if mivivienda_check is not None:
+        webgl_payload["mivivienda_check"] = mivivienda_check
+        normativa["mivivienda_check"] = mivivienda_check
 
     # ── Compatibilidad hacia atrás (campos que el JS actual consume) ──
     # Poda de campos que ningún consumidor (main.js / viewer3d.js) lee:
