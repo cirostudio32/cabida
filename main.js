@@ -1048,8 +1048,17 @@ const initApp = () => {
             true,
             `Consumo: ${volDom.toFixed(1)} m³ / ACI: ${volACI.toFixed(0)} m³ / Bombas: ${(sot.cisterna_maq || 0).toFixed(0)} m²`);
 
+        let mv = rneResultado?.normativa_estricta?.mivivienda_check;
+        if (mv?.aplica) {
+            html += row('Fondo Mivivienda — Checklist',
+                `${mv.n_unidades - mv.n_bajo_area_min}/${mv.n_unidades} unidades ≥ ${mv.area_min_m2}m² · ${mv.n_sin_precio_definido} sin precio definido · ${mv.n_sobre_tope_precio} sobre tope`,
+                mv.cumple_global,
+                mv.nota);
+        }
+
         html += '</div>';
         panel.innerHTML = html;
+        panel.style.display = '';
     }
 
 
@@ -1449,6 +1458,7 @@ const initApp = () => {
             altura_maxima_pisos: parseInt(document.getElementById('altura-max-pisos')?.value) || null,
             densidad_maxima_hab_ha: parseFloat(document.getElementById('densidad-max')?.value) || null,
             ajustar_pisos_normativa: !!document.getElementById('ajustar-pisos')?.checked,
+            acogido_mivivienda: !!document.getElementById('acogido-mivivienda')?.checked,
             num_ascensores: params.nAscensores || 1,
             num_departamentos: (() => {
                 const n1 = parseInt(document.getElementById('mix-1d')?.value) || 0;
