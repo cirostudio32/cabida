@@ -919,6 +919,31 @@ def _generate_claustro(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
 # TOPOLOGÍA: TOWER (núcleo central + dptos esquineros)
 # ═══════════════════════════════════════════════════════════════
 
+def _reflex_vertex(lote: Polygon):
+    """Vértice reflex (ángulo interior >180°) más pronunciado del lote, o
+    None si es convexo. En un lote esquinero (L-shape) es la esquina
+    interior — el lado opuesto (la esquina exterior, hacia calle) es la
+    que P1 marca como premium; el núcleo debe alejarse de ahí."""
+    coords = list(lote.exterior.coords)[:-1]
+    n = len(coords)
+    if n < 4:
+        return None
+    area2 = sum(coords[i][0] * coords[(i + 1) % n][1] - coords[(i + 1) % n][0] * coords[i][1]
+                for i in range(n))
+    ccw = area2 > 0
+    best = None
+    best_turn = 1e-6
+    for i in range(n):
+        p0, p1, p2 = coords[i - 1], coords[i], coords[(i + 1) % n]
+        v1 = (p1[0] - p0[0], p1[1] - p0[1])
+        v2 = (p2[0] - p1[0], p2[1] - p1[1])
+        cross = v1[0] * v2[1] - v1[1] * v2[0]
+        turn = cross if ccw else -cross
+        if turn < -best_turn:
+            best, best_turn = p1, -turn
+    return best
+
+
 def _generate_tower(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
                     half_L, half_S, hw, num_dptos, num_asc,
                     nec_esc_prot, nec_ascensor, pozo_final, h_edif):
@@ -2624,6 +2649,26 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
     # ── Topología: branch a claustro si aplica ──
     _topo_m = analizar_lote(lote, float(proyecto.frente or 0.0))
     _topo_s = seleccionar_topologia(_topo_m)
+
+    # P1 — esquinero: núcleo hacia medianera interior, esquina-calle
+    # premium. Sin dato explícito de qué arista es calle en coordenadas_lote,
+    # se infiere del vértice reflex (esquina interior del L): el núcleo se
+    # desplaza hacia ahí, agrandando el cuadrante opuesto (la esquina
+    # exterior hacia calle) para el dpto premium. Aplica antes de armar
+    # _args para que TODAS las topologías (spine/tower/etc.) hereden el bias.
+    if _topo_m.get("es_esquinero"):
+        _rv = _reflex_vertex(lote)
+        if _rv is not None:
+            _vx, _vy = _rv[0] - cx, _rv[1] - cy
+            _b_dl = _vx * dl_x + _vy * dl_y
+            _b_ds = _vx * ds_x + _vy * ds_y
+            _bn = math.hypot(_b_dl, _b_ds)
+            if _bn > 1e-6:
+                _b_dl, _b_ds = _b_dl / _bn, _b_ds / _bn
+                _BIAS = 0.30
+                cx = cx + dl_x * (_b_dl * half_L * _BIAS) + ds_x * (_b_ds * half_S * _BIAS)
+                cy = cy + dl_y * (_b_dl * half_L * _BIAS) + ds_y * (_b_ds * half_S * _BIAS)
+
     _args = (proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
              half_L, half_S, hw,
              max(2, proyecto.num_departamentos), num_asc,
