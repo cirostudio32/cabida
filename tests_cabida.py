@@ -38,6 +38,7 @@ THR_HUECOS_MAX   = 10.0   # m² — línea base permisiva
 THR_ACCESO_PCT   = 80.0   # % dptos con acceso ≥1.2m (E3 → 100%)
 THR_PARA_MAX     = 10.0   # grados — fondo vs lindero posterior
 THR_ND_DELTA     = 2      # tolerancia dptos emitidos vs pedidos
+THR_FRENTE_BAJO_PCT = 20.0  # % dptos con frente <5.2m (calibración DXF Lima)
 THR_SCORE_MIN    = 75     # E5: score mínimo por caso (compuerta E5 ≥85 promedio)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -251,6 +252,30 @@ def metric_acceso(geometry):
         except Exception:
             pass
     return ok, len(dptos)
+
+
+def metric_frente_min(geometry):
+    """Frente real (lado más corto del rectángulo envolvente) por dpto.
+    Devuelve (n_bajo_5.2m, n_total, min_visto)."""
+    dptos = geometry.get("departamentos", [])
+    n_bajo, min_visto = 0, None
+    for d in dptos:
+        pts = M._departamento_outline_coords(d)
+        dp = _pts_to_poly(pts)
+        if dp is None or dp.is_empty:
+            continue
+        try:
+            mrr = dp.minimum_rotated_rectangle
+            c = list(mrr.exterior.coords)
+            s0 = math.hypot(c[1][0] - c[0][0], c[1][1] - c[0][1])
+            s1 = math.hypot(c[2][0] - c[1][0], c[2][1] - c[1][1])
+            frente = min(s0, s1)
+        except Exception:
+            continue
+        min_visto = frente if min_visto is None else min(min_visto, frente)
+        if frente + 1e-6 < 5.2:
+            n_bajo += 1
+    return n_bajo, len(dptos), round(min_visto, 2) if min_visto is not None else None
 
 
 def metric_paralelismo(footprint, lote_poly):
@@ -528,6 +553,10 @@ CASOS = [
     _make_caso("USUARIO_nd8",   24, 29.3, 32.2, 32.1, 8),
     _make_caso("USUARIO_r0_nd4",24, 29.3, 32.2, 32.1, 4, retiro_lat=0, retiro_pos=0),
     _make_caso("USUARIO_r3_nd6",24, 29.3, 32.2, 32.1, 6, retiro_lat=2.3, retiro_pos=3.0),
+    # ── Lotes calibrados (REGLAS_DISENO.md, medidos de DXF reales Lima) ────
+    _make_caso("REGLAS_15x31_nd6",   15,   15, 31,   31,   6),
+    _make_caso("REGLAS_17x31_nd6",   17,   17, 31,   31,   6),
+    _make_caso("REGLAS_12x30_nd4",   12.5, 12.5, 30.5, 30.5, 4),
 ]
 
 
@@ -581,6 +610,7 @@ def run_caso(caso):
     acceso = metric_acceso(geometry)
     para = metric_paralelismo(footprint, lote_util)
     pz_total, pz_norm, pz_ratio = metric_pozos(geometry, h_edif)
+    frente_bajo, frente_tot, frente_min = metric_frente_min(geometry)
 
     metrics = {
         "nd_pedidos": c["nd"],
@@ -595,6 +625,9 @@ def run_caso(caso):
         "pozos_norm": pz_norm,
         "pozos_ratio": pz_ratio,
         "retiros_borde": retiros,
+        "frente_bajo": frente_bajo,
+        "frente_tot": frente_tot,
+        "frente_min": frente_min,
         "lote_area": round(lote_poly.area, 1),
         "util_area": round(lote_util.area, 1),
         "fp_area": round(footprint.area, 1) if footprint else 0,
@@ -642,6 +675,15 @@ def evaluate_metrics(caso, metrics):
     checks.append(("paralelismo",
                    m["paralelismo"] <= THR_PARA_MAX,
                    f"{m['paralelismo']}° (max {THR_PARA_MAX}°)"))
+
+    # frente real (REGLAS_DISENO.md: mín tipológico 5.2m) — tolera un
+    # residual bajo (mordida de pozo/lote irregular), no exige cero.
+    f_bajo, f_tot = m["frente_bajo"], m["frente_tot"]
+    f_pct_bajo = f_bajo / max(f_tot, 1) * 100
+    checks.append(("frente_min",
+                   f_pct_bajo <= THR_FRENTE_BAJO_PCT,
+                   f"{f_bajo}/{f_tot} dpto(s) < 5.2m ({f_pct_bajo:.0f}%, "
+                   f"max {THR_FRENTE_BAJO_PCT:.0f}%) min visto {m['frente_min']}m"))
 
     # retiros
     ped_map = {"frente": 0.0, "derecha": c["retiro_lat"],

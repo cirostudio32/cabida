@@ -2321,12 +2321,12 @@ def _evaluar_diseno(geometry: dict, lote_poly: Polygon, r_lat: float, r_pos: flo
             hall_poly = Polygon([(c["x"], c["y"]) for c in hall_pts])
         except Exception:
             pass
-    circ_polys: list = [hall_poly.buffer(0.08)] if hall_poly else []
+    circ_polys: list = [hall_poly] if hall_poly else []
     for item in geometry.get("corridors", []):
         if item and len(item) >= 3:
             try:
                 p = Polygon([(c["x"], c["y"]) for c in item])
-                circ_polys.append(p.buffer(0.08))
+                circ_polys.append(p)
             except Exception:
                 pass
     circ_union = unary_union(circ_polys) if circ_polys else None
@@ -2336,7 +2336,7 @@ def _evaluar_diseno(geometry: dict, lote_poly: Polygon, r_lat: float, r_pos: flo
             continue
         try:
             dp = Polygon([(c["x"], c["y"]) for c in pts])
-            if circ_union and dp.buffer(0.08).intersects(circ_union):
+            if circ_union and _door_access(dp, circ_union):
                 acc_ok += 1
         except Exception:
             pass
@@ -2369,6 +2369,28 @@ def _evaluar_diseno(geometry: dict, lote_poly: Polygon, r_lat: float, r_pos: flo
         defectos.append({"tipo": "pozo_luz", "severidad": "menor",
                          "descripcion": f"{pozos_bajo_norma} pozo(s) < {pozo_req:.2f}m "
                                         f"(RNE H/3 para dormitorios) — lote no da el ancho requerido"})
+
+    # ── Frente real (calibración DXF Lima, REGLAS_DISENO.md: mín 5.2m) ──
+    frente_bajo = 0
+    for dpto in dptos:
+        pts = _departamento_outline_coords(dpto)
+        if not pts or len(pts) < 3:
+            continue
+        try:
+            dp = Polygon([(c["x"], c["y"]) for c in pts])
+            if _rect_min_side(dp) + 1e-6 < 5.2:
+                frente_bajo += 1
+        except Exception:
+            pass
+    metricas["frente_bajo_norma"] = frente_bajo
+    if frente_bajo > 0:
+        # Severidad "menor" siempre: el lado mínimo del rectángulo envolvente
+        # puede salir chico por una muesca de pozo o un lote trapezoidal sin
+        # que la unidad sea realmente angosta (falso positivo geométrico) —
+        # se reporta para revisión, no bloquea el score/checklist.
+        defectos.append({"tipo": "frente_angosto", "severidad": "menor",
+                         "descripcion": f"{frente_bajo} dpto(s) con frente < 5.2m "
+                                        f"(calibración real Lima; revisar si es muesca de pozo o dpto tubo real)"})
 
     # ── Score ──────────────────────────────────────────────────
     s = 0
