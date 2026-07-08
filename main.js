@@ -620,12 +620,6 @@ const initApp = () => {
             pctEstac: parseFloat(document.getElementById("pct-estac")?.value) || 100,
             nAscensores: parseInt(numAscensoresInput ? numAscensoresInput.value : 1) || 0,
             dptosPlanta: parseInt(document.getElementById("dptos-planta")?.value) || 4,
-            distribucion: document.getElementById("distribucion")?.value || 'optimo',
-            modoObjetivo: document.getElementById("modo-objetivo")?.value || 'cantidad',
-            areaPromedio: parseFloat(document.getElementById("area-promedio")?.value) || 60,
-            ductW: parseFloat(document.getElementById("duct-w")?.value) || 2.2,
-            ductH: parseFloat(document.getElementById("duct-h")?.value) || 2.2,
-            numDuctosLimit: parseInt(document.getElementById("num-ductos")?.value) || 2,
             alturaPiso: parseFloat(document.getElementById("altura-piso")?.value) || 2.80,
             retiroLateral: (() => { const v = parseFloat(document.getElementById("retiro-lateral")?.value); return isNaN(v) ? 2.30 : v; })(),
             retiroPosterior: (() => { const v = parseFloat(document.getElementById("retiro-posterior")?.value); return isNaN(v) ? 2.30 : v; })(),
@@ -634,7 +628,7 @@ const initApp = () => {
         // === RNE A.010: Derived normative values ===
         let H = params.pisos * params.alturaPiso;
         params.H = H;
-        params.pozoDormMin = Math.max(2.20, H / 4);  // Dormitorios: d >= H/4, mín 2.20m
+        params.pozoDormMin = Math.max(2.20, H / 3);  // RNE A.010: dormitorios d >= H/3, mín 2.20m
         params.pozoSalaMin = Math.max(3.00, H / 3);  // Sala/Comedor: d >= H/3, mín 3.00m
         params.ductoVentAreaMin = 3.0;                // SSHH/Cocina: área mín 3.00m²
         params.ductoVentLadoMin = 1.50;               // SSHH/Cocina: lado mín 1.50m
@@ -732,7 +726,7 @@ const initApp = () => {
         // === INVIABILIDAD NORMATIVA ===
         // Si H/4 > ancho disponible del Lote Neto → pozos de luz no caben
         let loteNetoWidth = calculatePolyWidth(loteNetoPoly);
-        let pozoMinReq = params.pozoDormMin; // H/4 min
+        let pozoMinReq = params.pozoDormMin; // H/3 min
         let invAlert = document.getElementById('inviability-alert');
         if (invAlert) {
             if (loteNetoWidth > 0 && pozoMinReq >= loteNetoWidth * 0.5) {
@@ -761,39 +755,6 @@ const initApp = () => {
     }
 
     // --- FASE 2: Generación del Núcleo de Circulación Vertical ---
-
-    function buildBasePolygons(dptos) {
-        // 1. LIMPIEZA QUIRÚRGICA
-        // Vaciamos los polígonos antiguos, pero respetamos corePoly y window.hallProcedural
-        // porque ahora esos datos son sagrados y vienen de Python.
-        apartments = [];
-        patioPoly = [];
-        smallDuctos = [];
-        ascensorPoly = [];
-        escaleraPoly = [];
-        vestibuloPoly = [];
-
-        // 2. VARIABLES DE CONTINGENCIA
-        // Evitamos que las funciones de habitabilidad posteriores arrojen errores.
-        window.hasCore = true;
-        calc.maxDistEscalera = 0;
-        calc.cumple25m = true;
-
-        // 3. MOCK (SIMULACIÓN) DE DEPARTAMENTOS
-        // Creamos "fantasmas" de departamentos sin geometría (poly: []).
-        // Esto permite que la función de sótanos calcule la cisterna y los 
-        // estacionamientos requeridos sin que el código colapse por falta de datos.
-        let cantidadDptos = dptos || 6;
-        for (let i = 0; i < cantidadDptos; i++) {
-            apartments.push({
-                id: `X${String(i + 1).padStart(2, '0')}`,
-                poly: [], // Sin polígono para que el Canvas no dibuje basura
-                area: 60,
-                typology: '3D',
-                hab: 3
-            });
-        }
-    }
 
     function processGeometryAndCheckHabitability(dptosToTry) {
         let totalVendible = 0;
@@ -940,43 +901,6 @@ const initApp = () => {
         calc.realTotalPlanta = totalVendible + hallArea;
 
         return true;
-    }
-
-    function runAILayoutGeneration() {
-        let dptos = params.dptosPlanta;
-        if (params.modoObjetivo === 'area') {
-            let estUsable = calc.areaLoteNeto * 0.85;
-            dptos = Math.max(1, Math.round(estUsable / params.areaPromedio));
-        }
-
-        // Connectivity loop: regenerate until all units touch the hall
-        let maxRetries = 3;
-        for (let attempt = 0; attempt < maxRetries; attempt++) {
-            buildBasePolygons(dptos);
-            processGeometryAndCheckHabitability(dptos);
-
-            // Check connectivity
-            let allConnected = true;
-            if (corePoly.length > 0) {
-                let turfCore = polyToTurf(corePoly);
-                if (turfCore) {
-                    try {
-                        let bufferedCore = turf.buffer(turfCore, 0.20, { units: 'meters' });
-                        for (const ap of apartments) {
-                            let turfUnit = polyToTurf(ap.poly);
-                            if (turfUnit) {
-                                let overlap = turf.intersect(bufferedCore, turfUnit);
-                                if (!overlap) { allConnected = false; break; }
-                            }
-                        }
-                    } catch (e) { }
-                }
-            }
-            if (allConnected) break;
-        }
-
-        updateTables();
-        updateCompliancePanel();
     }
 
     function updateCompliancePanel() {

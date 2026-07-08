@@ -2266,6 +2266,31 @@ def _evaluar_diseno(geometry: dict, lote_poly: Polygon, r_lat: float, r_pos: flo
 # GENERACIÓN DE GEOMETRÍA (núcleo, idéntico al anterior)
 # ═══════════════════════════════════════════════════════════════
 
+# Variables que solo el generador "spine" (fallback genérico) implementa
+# de verdad; costillas/hall_compacto/claustro/tower las ignoran en silencio.
+_HONRA_MIX = {"spine"}
+_HONRA_ESQUEMA = {"spine"}
+_HONRA_PRECIOS = {"spine"}
+_HONRA_OPTIMIZAR = {"spine", "claustro", "tower"}
+
+
+def _variables_ignoradas(proyecto: ProyectoInmobiliario, topo_usada: str) -> list:
+    """Avisa qué variables enviadas por el usuario no tienen efecto en la
+    topología efectivamente usada, en vez de ignorarlas en silencio."""
+    avisos = []
+    if proyecto.mix_tipologias and topo_usada not in _HONRA_MIX:
+        avisos.append(f"mix_tipologias: sin efecto en topología '{topo_usada}' (solo aplica en spine)")
+    if proyecto.esquema_area_libre and proyecto.esquema_area_libre != "muros_ciegos" and topo_usada not in _HONRA_ESQUEMA:
+        avisos.append(f"esquema_area_libre='{proyecto.esquema_area_libre}': sin efecto en topología '{topo_usada}' (solo aplica en spine)")
+    if proyecto.optimizar_densidad and topo_usada not in _HONRA_OPTIMIZAR:
+        avisos.append(f"optimizar_densidad: sin efecto en topología '{topo_usada}' (solo aplica en spine/claustro/tower)")
+    if proyecto.precios_tipologia and topo_usada not in _HONRA_PRECIOS:
+        avisos.append(f"precios_tipologia: sin efecto en topología '{topo_usada}' (solo aplica en spine)")
+    if proyecto.ciego_frente:
+        avisos.append("ciego_frente: sin implementación en el motor, no afecta ningún resultado")
+    return avisos
+
+
 def _generate_geometry(proyecto: ProyectoInmobiliario):
     """Core geometry generation — shared between audit and render endpoints."""
     lote = Polygon(proyecto.coordenadas_lote)
@@ -2336,9 +2361,10 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
     _r_pos_ev = float(proyecto.retiro_posterior or 0.0)
     _nd_req = max(2, proyecto.num_departamentos)
 
-    def _emit(g, n):
-        """Adjunta evaluación E5 al geometry dict y retorna."""
+    def _emit(g, n, topo_usada):
+        """Adjunta evaluación E5 + avisos de variables ignoradas y retorna."""
         n["ascensor_forzado"] = ascensor_forzado
+        n["variables_ignoradas"] = _variables_ignoradas(proyecto, topo_usada)
         try:
             g["evaluacion"] = _evaluar_diseno(g, lote, _r_lat_ev, _r_pos_ev, _nd_req, pozo_final)
         except Exception:
@@ -2349,11 +2375,11 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
         # 1º: costillas (corredor central, patrón ref 9) para lotes ≥13m ancho
         _g, _n = _generate_costillas(*_args)
         if _g is not None:
-            return _emit(_g, _n)
+            return _emit(_g, _n, "costillas")
         # 2º: hall compacto con núcleo lateral (lotes angostos/cortos)
         _g, _n = _generate_hall_compacto(*_args)
         if _g is not None:
-            return _emit(_g, _n)
+            return _emit(_g, _n, "hall_compacto")
         # No factible: lote demasiado angosto para cualquier topología multifamiliar.
         _r_lat = float(proyecto.retiro_lateral or 0.0)
         _r_pos = float(proyecto.retiro_posterior or 0.0)
@@ -2365,10 +2391,10 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
         )
     if _topo_s["recomendada"] == "claustro":
         _g, _n = _generate_claustro(*_args)
-        return _emit(_g, _n)
+        return _emit(_g, _n, "claustro")
     if _topo_s["recomendada"] == "tower":
         _g, _n = _generate_tower(*_args)
-        return _emit(_g, _n)
+        return _emit(_g, _n, "tower")
 
     hall_poly = make_rect(cx, cy, dl_x, dl_y, ds_x, ds_y, half_L, hw)
     hall_clipped = safe_clip(hall_poly, lote)
@@ -3469,6 +3495,8 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
         except Exception:
             pass
 
+    normativa["variables_ignoradas"] = _variables_ignoradas(proyecto, "spine")
+
     # E5: evaluación interna (spine fallback path)
     try:
         geometry["evaluacion"] = _evaluar_diseno(
@@ -4289,6 +4317,7 @@ def _build_webgl_payload(
             "area_min_dpto_m2": normativa.get("area_min_dpto"),
             "estacionamiento_ancho_m": normativa.get("estacionamiento_ancho"),
             "dotaciones": normativa.get("dotaciones"),
+            "variables_ignoradas": normativa.get("variables_ignoradas", []),
         },
         "geometria": {
             "lote": {"type": "polygon", "coords": lote_coords},
