@@ -931,7 +931,7 @@ const initApp = () => {
         let sot = window.webglPayload?.sotano || {};
         let totalDptos = apartments.length * params.pisos;
         let estReq = sot.req_estac ?? Math.ceil(totalDptos * (params.pctEstac / 100));
-        let estLogrados = sot.count || 0;
+        let estLogrados = sot.count_total ?? (sot.count || 0);
         let cumpleEst = estLogrados >= estReq;
 
         // 4. Cisterna (backend)
@@ -1012,7 +1012,9 @@ const initApp = () => {
         html += row('A.010 Art.65 — Estacionamientos',
             `${estLogrados} logrados vs ${estReq} requeridos`,
             cumpleEst,
-            `Sótano ${sot.name || 'S1'}`);
+            (sot.num_niveles || 1) > 1
+                ? `${sot.num_niveles} sótanos (S1..S${sot.num_niveles})`
+                : `Sótano ${sot.name || 'S1'}`);
 
         let cab = rneResultado?.geometria_generada?.cabida_multifamiliar;
         if (cab) {
@@ -1725,14 +1727,20 @@ const initApp = () => {
                 sotanoLevelSelect.style.display = isSotano ? 'inline-block' : 'none';
                 const sot = window.webglPayload?.sotano;
                 if (isSotano && sot) {
-                    sotanoLevelSelect.innerHTML =
-                        `<option value="0">${sot.name || 'S1'} (${sot.count || 0} est.)</option>`;
+                    const niveles = (sot.niveles && sot.niveles.length)
+                        ? sot.niveles
+                        : [{ name: sot.name || 'S1', count: sot.count || 0 }];
+                    sotanoLevelSelect.innerHTML = niveles
+                        .map((nv, i) => `<option value="${i}">${nv.name} (${nv.count} est.)</option>`)
+                        .join('');
+                    getViewer3D()?.setSotanoLevel(0);
                 }
             }
         });
     }
     if (sotanoLevelSelect) {
         sotanoLevelSelect.addEventListener("change", () => {
+            getViewer3D()?.setSotanoLevel(parseInt(sotanoLevelSelect.value, 10) || 0);
         });
     }
 

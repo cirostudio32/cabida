@@ -3569,6 +3569,12 @@ def _generate_primer_piso(proyecto: ProyectoInmobiliario, geometry: dict):
     HAS_SOTANO = (proyecto.pct_estac or 0) > 0
     # Rampa vehicular: RNE A.010 art. 33 → 3.00m libre, solo si hay sótano y lote suficiente
     RAMPA_W = 3.00 if HAS_SOTANO and b_w >= 8.0 else 0.0
+    # G7: mismo largo que la rampa real del sótano (RNE art.66, pendiente max
+    # 15%) — antes esta huella cruzaba TODO el fondo (vd=1.0) desalineada del
+    # tramo real que dibuja _generate_sotano (regresión visual si no coincide).
+    RAMPA_PENDIENTE_MAX = 0.15
+    _h_nivel = float(proyecto.altura_piso or 2.80)
+    RAMPA_L = min(b_d, max(4.5, _h_nivel / RAMPA_PENDIENTE_MAX))
     GAP = 0.10
 
     # Cuarto de basura: RNE A.010 art. 40 → 0.03m²/m² área techada/piso, min 6m²
@@ -3644,7 +3650,7 @@ def _generate_primer_piso(proyecto: ProyectoInmobiliario, geometry: dict):
     if RAMPA_W > 0:
         u0, u1 = _place(RAMPA_W)
         if u0 is not None:
-            rampa = _get_cell(lote_neto, u0, u1, 0, 1.0)
+            rampa = _get_cell(lote_neto, u0, u1, 0, vd(RAMPA_L))
 
     # 2. Cuarto de basura
     basura = []
@@ -3852,12 +3858,18 @@ def _generate_sotano(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
     min_x, max_x = min(xs), max(xs)
     min_y, max_y = min(ys), max(ys)
 
+    # G7: largo real de rampa por pendiente RNE A.010 art.66 (max 15% recta),
+    # no la profundidad completa del lote — antes cruzaba todo el fondo
+    # (ej. 27m) desperdiciando losa que podía ser plazas/cisternas.
     RAMPA_W = 3.0
+    RAMPA_PENDIENTE_MAX = 0.15
+    h_nivel = float(proyecto.altura_piso or 2.80)
+    rampa_largo = min(max_y - min_y, max(4.5, h_nivel / RAMPA_PENDIENTE_MAX))
     rampa = [
         {"x": round(min_x, 3), "y": round(min_y, 3)},
         {"x": round(min_x + RAMPA_W, 3), "y": round(min_y, 3)},
-        {"x": round(min_x + RAMPA_W, 3), "y": round(max_y, 3)},
-        {"x": round(min_x, 3), "y": round(max_y, 3)},
+        {"x": round(min_x + RAMPA_W, 3), "y": round(min_y + rampa_largo, 3)},
+        {"x": round(min_x, 3), "y": round(min_y + rampa_largo, 3)},
     ]
     rampa_poly = Polygon([(p["x"], p["y"]) for p in rampa])
 

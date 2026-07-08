@@ -141,6 +141,7 @@ export class Viewer3D {
     this._labels     = [];          // CSS2DObject[] para limpiar DOM
     this._disposed   = false;
     this._frameLogged = false;       // Debug flag
+    this._sotanoLevelIdx = 0;        // Nivel de sótano mostrado en 2D (S1=0, S2=1...)
 
     this._buildRenderer();
     this._buildScene();
@@ -574,13 +575,13 @@ export class Viewer3D {
         // Solo marcar la boca en cubierta — ningún mesh dentro del shaft.
         const zRim = depth3D + 0.01;
         this._outline(g, p.coords, strokeCol, 2.0, zRim + 0.06);
-        this._crossBox(g, p.coords, strokeCol, 0.9, zRim + 0.08);
+        this._cross(g, p.coords, strokeCol, 0.9, zRim + 0.08);
         this._label(g, p.coords, lbl, 'label-pozo', zRim + 0.12);
       } else {
         const zPozo = 0.35;
         this._mesh(g, p.coords, fillCol, 1.0, thin, zPozo);
         this._outline(g, p.coords, strokeCol, 1.5, zPozo + 0.02);
-        this._crossBox(g, p.coords, strokeCol, 0.9, zPozo + 0.04);
+        this._cross(g, p.coords, strokeCol, 0.9, zPozo + 0.04);
         this._label(g, p.coords, lbl, 'label-pozo', zPozo + 0.08);
       }
     });
@@ -684,34 +685,48 @@ export class Viewer3D {
     }
 
     // ── 8. SÓTANO ────────────────────────────────────────────
+    // 2D: solo dibuja el nivel seleccionado (this._sotanoLevelIdx) — apilar
+    // todos en top-view los superpone en la misma x,y (ilegible). 3D: apila
+    // todos los niveles reales, cada uno visible por su profundidad propia.
     const sot = geometria.sotano;
     if (sot) {
-      const zSot = is3D ? -altPiso * 1.5 : -0.05;
-      if (sot.slab?.length >= 3) {
+      const niveles = (sot.niveles && sot.niveles.length)
+        ? sot.niveles
+        : [{ name: sot.name, stalls: sot.stalls, aisles: sot.aisles, count: sot.count }];
+      const selIdx = Math.min(this._sotanoLevelIdx || 0, niveles.length - 1);
+      const drawNivel = (nv, i) => {
+        const zNv = is3D ? -altPiso * 1.5 * (i + 1) : -0.05;
         const g = this._group('sotano');
-        this._mesh(g, sot.slab, 0xe2e8f0, 0.82, thin, zSot);
-        this._outline(g, sot.slab, 0x64748b, 1.5, zSot + 0.05);
+        if (sot.slab?.length >= 3) {
+          this._mesh(g, sot.slab, 0xe2e8f0, 0.82, thin, zNv);
+          this._outline(g, sot.slab, 0x64748b, 1.5, zNv + 0.05);
+        }
+        (nv.aisles || []).forEach(a => {
+          if (!a?.length) return;
+          this._mesh(this._group('sotano'), a, 0xe2e8f0, 0.6, thin, zNv + 0.02);
+        });
+        (nv.stalls || []).forEach(st => {
+          if (!st.coords?.length) return;
+          this._mesh(g, st.coords, 0xffffff, 0.92, thin, zNv + 0.03);
+          this._outline(g, st.coords, 0x475569, 0.9, zNv + 0.06);
+          this._label(g, st.coords, st.id, 'label-stall', zNv + 0.1);
+        });
+        if (i === 0) {
+          (sot.cisternas || []).forEach(c => {
+            if (!c.coords?.length) return;
+            const col = parseInt((c.fill || '#bfdbfe').replace('#', ''), 16);
+            const strk = parseInt((c.stroke || '#2563eb').replace('#', ''), 16);
+            this._mesh(g, c.coords, col, 0.92, thin, zNv + 0.04);
+            this._outline(g, c.coords, strk, 1.2, zNv + 0.08);
+            this._label(g, c.coords, c.label || '', 'label-cisterna', zNv + 0.1);
+          });
+        }
+      };
+      if (is3D) {
+        niveles.forEach(drawNivel);
+      } else {
+        drawNivel(niveles[selIdx], selIdx);
       }
-      (sot.aisles || []).forEach(a => {
-        if (!a?.length) return;
-        this._mesh(this._group('sotano'), a, 0xe2e8f0, 0.6, thin, zSot + 0.02);
-      });
-      (sot.stalls || []).forEach(st => {
-        if (!st.coords?.length) return;
-        const g = this._group('sotano');
-        this._mesh(g, st.coords, 0xffffff, 0.92, thin, zSot + 0.03);
-        this._outline(g, st.coords, 0x475569, 0.9, zSot + 0.06);
-        this._label(g, st.coords, st.id, 'label-stall', zSot + 0.1);
-      });
-      (sot.cisternas || []).forEach(c => {
-        if (!c.coords?.length) return;
-        const col = parseInt((c.fill || '#bfdbfe').replace('#', ''), 16);
-        const strk = parseInt((c.stroke || '#2563eb').replace('#', ''), 16);
-        const g = this._group('sotano');
-        this._mesh(g, c.coords, col, 0.92, thin, zSot + 0.04);
-        this._outline(g, c.coords, strk, 1.2, zSot + 0.08);
-        this._label(g, c.coords, c.label || '', 'label-cisterna', zSot + 0.1);
-      });
     }
 
     // ── 9. AZOTEA ────────────────────────────────────────────
@@ -785,6 +800,15 @@ export class Viewer3D {
   setView(view) {
     this._activeView = view;
     this._syncVis();
+  }
+
+  /** Cambia el nivel de sótano mostrado en 2D (S1=0, S2=1...) y re-dibuja. */
+  setSotanoLevel(idx) {
+    this._sotanoLevelIdx = idx || 0;
+    if (this._geometria) {
+      this.renderProyecto(this._geometria, this._metadata);
+      this._syncVis();
+    }
   }
 
   _syncVis() {
@@ -872,28 +896,9 @@ export class Viewer3D {
     group.add(new Line2(geo, mat));
   }
 
-  /** Cruz decorativa — usa Line2 para respetar linewidth en WebGL */
-  /** X de arista a arista: diagonales del bounding box del polígono.
-      Convención de plano para vacíos (pozos, ductos, cajas de ascensor). */
-  _crossBox(group, coords, color = 0x9ca3af, opacity = 0.9, z = 0.35) {
-    if (!coords || coords.length < 3) return;
-    const W = this.container.offsetWidth  || 800;
-    const H = this.container.offsetHeight || 600;
-    const xs = coords.map(p => p[0]), ys = coords.map(p => p[1]);
-    const x0 = Math.min(...xs), x1 = Math.max(...xs);
-    const y0 = Math.min(...ys), y1 = Math.max(...ys);
-    for (const [a, b] of [[[x0, y0], [x1, y1]], [[x0, y1], [x1, y0]]]) {
-      const geo = new LineGeometry();
-      geo.setPositions([a[0], -a[1], z, b[0], -b[1], z]);
-      const mat = new LineMaterial({
-        color, linewidth: 1.5,
-        transparent: opacity < 1, opacity,
-        resolution: new THREE.Vector2(W, H),
-      });
-      group.add(new Line2(geo, mat));
-    }
-  }
-
+  /** Cruz decorativa — usa Line2 para respetar linewidth en WebGL.
+      X de arista a arista: pares de vértices opuestos del polígono (no bbox —
+      un pozo clippeado/irregular tenía la X desalineada de sus esquinas reales). */
   _cross(group, coords, color = 0x94a3b8, opacity = 0.5, z = 0.35) {
     if (!coords || coords.length < 3) return;
     const W = this.container.offsetWidth  || 800;
