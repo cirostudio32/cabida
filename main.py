@@ -3479,32 +3479,30 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
 
 
 def _generate_primer_piso(proyecto: ProyectoInmobiliario, geometry: dict):
-    frente    = proyecto.frente or 10
-    fondo_val = proyecto.fondo or 10
-    derecha   = proyecto.derecha or 20
-    izquierda = proyecto.izquierda or 20
-    retiro_frontal = proyecto.retiro_frontal
+    coords = proyecto.coordenadas_lote
+    if len(coords) != 4:
+        # lote no cuadrilátero: bbox real como fallback (_get_cell exige quad)
+        lote_sh = Polygon(coords)
+        if not lote_sh.is_valid:
+            lote_sh = lote_sh.buffer(0)
+        bx0, by0, bx1, by1 = lote_sh.bounds
+        coords = [[bx0, by0], [bx1, by0], [bx1, by1], [bx0, by1]]
+    p1, p2, p3, p4 = ({"x": x, "y": y} for x, y in coords)
 
-    p1 = {"x": -frente / 2,    "y": 0}
-    p2 = {"x":  frente / 2,    "y": 0}
-    p3 = {"x":  fondo_val / 2, "y": derecha}
-    p4 = {"x": -fondo_val / 2, "y": izquierda}
+    # coordenadas_lote ya viene neto de retiro frontal (mismo contrato que
+    # _erode_lote y la planta típica: "frente ya viene neto") — mismo marco
+    # real que usan escalera/ascensores/departamentos, sin reconstrucción
+    # sintética independiente.
+    techada_poly = [p1, p2, p3, p4]
 
-    rt_y = min(retiro_frontal, derecha, izquierda)
-    if rt_y > 0 and izquierda > 0 and derecha > 0:
-        pr3 = _interpolate(p2, p3, rt_y / derecha)
-        pr4 = _interpolate(p1, p4, rt_y / izquierda)
-        techada_poly = [pr4, pr3, p3, p4]
-    else:
-        techada_poly = [p1, p2, p3, p4]
+    r_lat = float(proyecto.retiro_lateral or 0.0)
+    frente_neto = max(1.0, math.hypot(p2["x"] - p1["x"], p2["y"] - p1["y"]))
+    fondo_izq   = max(1.0, math.hypot(p4["x"] - p1["x"], p4["y"] - p1["y"]))
+    fondo_der   = max(1.0, math.hypot(p3["x"] - p2["x"], p3["y"] - p2["y"]))
 
-    retiro_lat  = 2.30
-    frente_neto = max(1.0, frente)
-    fondo_neto  = max(1.0, (derecha + izquierda) / 2)
-
-    u_left  = 0.0 if proyecto.ciego_izquierda else retiro_lat / frente_neto
-    u_right = 1.0 if proyecto.ciego_derecha   else 1.0 - retiro_lat / frente_neto
-    v_bot   = 1.0 if proyecto.ciego_fondo     else 1.0 - retiro_lat / fondo_neto
+    u_left  = 0.0 if proyecto.ciego_izquierda else r_lat / frente_neto
+    u_right = 1.0 if proyecto.ciego_derecha   else 1.0 - r_lat / frente_neto
+    v_bot   = 1.0 if proyecto.ciego_fondo     else 1.0 - r_lat / ((fondo_izq + fondo_der) / 2)
 
     lote_neto = _get_cell(techada_poly, u_left, u_right, 0, v_bot)
     b_w = max(1.0, _poly_width(lote_neto))
@@ -3582,7 +3580,19 @@ def _generate_primer_piso(proyecto: ProyectoInmobiliario, geometry: dict):
     # 5. Lobby: from current u cursor (services done) to lobby_u1
     lobby_u0 = u
     lobby_u1 = min(1.0, lobby_u0 + uw(LOBBY_W))
-    lobby = _get_cell(lote_neto, lobby_u0, lobby_u1, 0, vd(LOBBY_D))
+    lobby_depth = LOBBY_D
+    esc_pts = geometry.get("escalera") or []
+    if esc_pts and len(esc_pts) >= 3:
+        exs = [p["x"] for p in esc_pts]
+        eys = [p["y"] for p in esc_pts]
+        lobby_x0 = p1["x"] + (p2["x"] - p1["x"]) * lobby_u0
+        lobby_x1 = p1["x"] + (p2["x"] - p1["x"]) * lobby_u1
+        if lobby_x1 > min(exs) and lobby_x0 < max(exs):
+            # escalera cae en el ancho del lobby → extender profundidad
+            # hasta tocarla (RNE A.010: acceso continuo hall→núcleo)
+            front_y = min(p1["y"], p2["y"])
+            lobby_depth = max(LOBBY_D, (max(eys) - front_y) + 0.30)
+    lobby = _get_cell(lote_neto, lobby_u0, lobby_u1, 0, vd(lobby_depth))
 
     # 6. Comercio: right remainder (only if > 1.5m wide)
     com2 = []
