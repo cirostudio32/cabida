@@ -414,6 +414,18 @@ def _get_cell(quad, u1, u2, v1, v2):
 _calculate_poly_area = calc_poly_area
 
 
+def _rect_min_side(shapely_poly) -> float:
+    """Lado más corto del rectángulo envolvente mínimo (proxy de frente real)."""
+    try:
+        mrr = shapely_poly.minimum_rotated_rectangle
+        c = list(mrr.exterior.coords)
+        s0 = math.hypot(c[1][0] - c[0][0], c[1][1] - c[0][1])
+        s1 = math.hypot(c[2][0] - c[1][0], c[2][1] - c[1][1])
+        return min(s0, s1)
+    except Exception:
+        return 0.0
+
+
 def _poly_width(poly):
     if len(poly) < 4:
         return 0
@@ -469,19 +481,34 @@ def _max_units_on_strips(segments: List[Tuple[float, float]], depth: float, min_
     return total
 
 
+MIN_PUERTA_M = 0.90  # RNE A.010: vano de puerta real, no esquina rozada
+
+
+def _door_access(unit_poly, circ_poly, min_len: float = MIN_PUERTA_M, buf: float = 0.05) -> bool:
+    """True solo si la unidad comparte una arista real (>=min_len) con la
+    circulación (hall/corredor), no si apenas toca una esquina."""
+    if unit_poly is None or circ_poly is None or unit_poly.is_empty or circ_poly.is_empty:
+        return False
+    try:
+        shared = unit_poly.boundary.intersection(circ_poly.buffer(buf))
+        return float(shared.length) >= min_len
+    except Exception:
+        return False
+
+
 def _validate_adjacency(dpto_coords: list, hall_coords: list, tolerance: float = 0.50) -> bool:
     """
-    Returns True if at least one segment of dpto_coords shares an edge
-    (or is within tolerance) with hall_coords.
-    Uses bounding-box pre-check + vertex proximity.
+    Returns True if dpto_coords shares a real door-length edge with hall_coords
+    (>=MIN_PUERTA_M), not just a touching corner.
     """
-    if not dpto_coords or not hall_coords:
+    if not dpto_coords or len(dpto_coords) < 3 or not hall_coords or len(hall_coords) < 3:
         return False
-    for dp in dpto_coords:
-        for hp in hall_coords:
-            if abs(dp[0] - hp[0]) <= tolerance and abs(dp[1] - hp[1]) <= tolerance:
-                return True
-    return False
+    try:
+        dp_poly = Polygon(dpto_coords)
+        hall_poly = Polygon(hall_coords)
+        return _door_access(dp_poly, hall_poly, min_len=MIN_PUERTA_M, buf=max(tolerance, 0.05))
+    except Exception:
+        return False
 
 
 def _departamento_outline_coords(entry: Any) -> list:
@@ -1276,6 +1303,21 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
     # Profundidad de zona media = lo necesario; el resto queda como patio
     Dm = max(nuc_l_h + filas_l * h_fila, nuc_r_h + filas_r * h_fila, ESC_L) + 0.20
 
+    # A4: la construcción reparte Dm completo entre filas_l/filas_r por
+    # igual (no descuenta nuc_l_h/nuc_r_h, el núcleo se recorta después).
+    # Si un lado tiene menos filas que el otro, hereda la Dm del lado que
+    # manda y su única fila se estira (>75m², fuera de rango calibrado).
+    # Solo se repone ESE lado (el que no fija Dm) con más filas de tamaño
+    # h_fila real; el lado que ya fija Dm queda intacto para no alterar
+    # el manejo de bordes inclinados/trapezoidales.
+    term_l = nuc_l_h + filas_l * h_fila
+    term_r = nuc_r_h + filas_r * h_fila
+    if filas_l > 0 and term_l < term_r - 1e-6:
+        filas_l = max(filas_l, int(Dm // h_fila))
+    if filas_r > 0 and term_r < term_l - 1e-6:
+        filas_r = max(filas_r, int(Dm // h_fila))
+    n_m = filas_l + filas_r
+
     yf0 = ya + Df       # arranque zona costillas (línea frente)
     yb0 = yf0 + Dm      # remate zona costillas (línea fondo)
     y_end = yb0 + Db
@@ -1466,7 +1508,7 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
                 ap = max(ap.geoms, key=lambda g: g.area)
         if ap.is_empty or ap.area < min_area_dpto * 0.85:
             continue
-        if hall_clipped is not None and not ap.buffer(0.08).intersects(hall_clipped):
+        if hall_clipped is not None and not _door_access(ap, hall_clipped):
             sin_acceso += 1
             continue
         area_gross = float(ap.area)
@@ -1493,7 +1535,7 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
             "area_m2": r3(area_m),
             "area_gross_m2": r3(area_gross),
             "lado": spec["lado"],
-            "es_reducida": False,
+            "es_reducida": bool(_rect_min_side(ap) < 5.2 or area_m < min_area_dpto * 1.05),
             "zonas": zonas_payload,
             "validacion": val_u,
         })
@@ -1653,12 +1695,13 @@ def _generate_hall_compacto(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
     Wm_est = W - CORE_W - CORR_W
 
     def _block_cap_d(width_avail, depth_blk, bite_area):
-        """Máx unidades en bloque full-width: frente mín 4.2m y área neta
+        """Máx unidades en bloque full-width: frente mín 5.2m (calibración
+        DXF Lima — ancho tipológico 1D, REGLAS_DISENO.md) y área neta
         del bloque (descontando mordidas de pozo, que se compensan con
         ancho extra en las unidades de borde)."""
         if depth_blk <= 3.5 or width_avail <= 0:
             return 0
-        by_frente = int(width_avail // 3.5)
+        by_frente = int(width_avail // 5.2)
         by_area = int((width_avail * depth_blk - bite_area) / (min_area_dpto * 1.05))
         return max(0, min(4, by_frente, by_area))
 
@@ -1983,8 +2026,9 @@ def _generate_hall_compacto(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
                 ap = max(ap.geoms, key=lambda g: g.area)
         if ap.is_empty or ap.area < min_area_dpto * 0.85:
             continue
-        # Garantía de acceso: la unidad debe colindar con hall/corredor
-        if hall_clipped is not None and not ap.buffer(0.08).intersects(hall_clipped):
+        # Garantía de acceso: la unidad debe tener vano de puerta real al
+        # hall/corredor (>=MIN_PUERTA_M), no solo tocar una esquina.
+        if hall_clipped is not None and not _door_access(ap, hall_clipped):
             sin_acceso += 1
             continue
         area_gross = float(ap.area)
@@ -2011,7 +2055,7 @@ def _generate_hall_compacto(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
             "area_m2": r3(area_m),
             "area_gross_m2": r3(area_gross),
             "lado": spec["lado"],
-            "es_reducida": False,
+            "es_reducida": bool(_rect_min_side(ap) < 5.2 or area_m < min_area_dpto * 1.05),
             "zonas": zonas_payload,
             "validacion": val_u,
         })
