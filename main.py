@@ -3981,60 +3981,95 @@ def _generate_sotano(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
             x_cursor += stall_w
         return row
 
-    stalls = []
-    aisles = []
-    stall_num = 1
-    remaining = req_estac
-    y_cursor = min_y
+    def _scan_nivel(need):
+        """Llena una losa (mismo footprint) con hasta `need` plazas."""
+        stalls = []
+        aisles = []
+        stall_num = 1
+        remaining = need
+        y_cursor = min_y
 
-    while remaining > 0 and y_cursor + stall_d <= max_y:
-        row1 = _scan_row(y_cursor)
-        for stall in row1:
-            if remaining <= 0:
-                break
-            stalls.append({"id": f"E-{stall_num:02d}", "poly": stall})
-            stall_num += 1; remaining -= 1
+        while remaining > 0 and y_cursor + stall_d <= max_y:
+            row1 = _scan_row(y_cursor)
+            for stall in row1:
+                if remaining <= 0:
+                    break
+                stalls.append({"id": f"E-{stall_num:02d}", "poly": stall})
+                stall_num += 1; remaining -= 1
 
-        if row1:
-            aisle_y = y_cursor + stall_d
-            if aisle_y + aisle_w < max_y:
-                aisle = [
-                    {"x": round(min_x, 3), "y": round(aisle_y, 3)},
-                    {"x": round(max_x, 3), "y": round(aisle_y, 3)},
-                    {"x": round(max_x, 3), "y": round(aisle_y + aisle_w, 3)},
-                    {"x": round(min_x, 3), "y": round(aisle_y + aisle_w, 3)},
-                ]
-                aisles.append(aisle)
-                y_cursor = aisle_y + aisle_w
+            if row1:
+                aisle_y = y_cursor + stall_d
+                if aisle_y + aisle_w < max_y:
+                    aisle = [
+                        {"x": round(min_x, 3), "y": round(aisle_y, 3)},
+                        {"x": round(max_x, 3), "y": round(aisle_y, 3)},
+                        {"x": round(max_x, 3), "y": round(aisle_y + aisle_w, 3)},
+                        {"x": round(min_x, 3), "y": round(aisle_y + aisle_w, 3)},
+                    ]
+                    aisles.append(aisle)
+                    y_cursor = aisle_y + aisle_w
+                else:
+                    break
+                if remaining > 0 and y_cursor + stall_d <= max_y:
+                    row2 = _scan_row(y_cursor)
+                    for stall in row2:
+                        if remaining <= 0:
+                            break
+                        stalls.append({"id": f"E-{stall_num:02d}", "poly": stall})
+                        stall_num += 1; remaining -= 1
+                    y_cursor += stall_d
             else:
-                break
-            if remaining > 0 and y_cursor + stall_d <= max_y:
-                row2 = _scan_row(y_cursor)
-                for stall in row2:
-                    if remaining <= 0:
-                        break
-                    stalls.append({"id": f"E-{stall_num:02d}", "poly": stall})
-                    stall_num += 1; remaining -= 1
-                y_cursor += stall_d
-        else:
-            y_cursor += 1.0
+                y_cursor += 1.0
+        return stalls, aisles
 
     nucleo_out = [poly_to_js(sp) for sp in nucleo_shapes]
 
+    # ── Niveles: si un sótano no cabe la demanda de req_estac, se agregan
+    # niveles adicionales (mismo footprint, rampa/núcleo continúan verticales)
+    # hasta cubrir el déficit — antes se reportaba count < req_estac sin
+    # ninguna acción (hallazgo: 12/21 plazas, "cumple" nunca se corregía). ──
+    MAX_NIVELES = 6
+    niveles = []
+    cubiertas = 0
+    nivel_idx = 1
+    while cubiertas < req_estac and nivel_idx <= MAX_NIVELES:
+        stalls_n, aisles_n = _scan_nivel(req_estac - cubiertas)
+        if not stalls_n and nivel_idx > 1:
+            break  # nivel adicional no aporta plazas: parar (lote no da más)
+        niveles.append({
+            "name": f"S{nivel_idx}",
+            "slab": slab,
+            "stalls": stalls_n,
+            "aisles": aisles_n,
+            "count": len(stalls_n),
+            "rampa": rampa,
+            "nucleo": nucleo_out,
+            "cisternas": cisternas if nivel_idx == 1 else [],
+        })
+        cubiertas += len(stalls_n)
+        if not stalls_n:
+            break
+        nivel_idx += 1
+
+    s1 = niveles[0]
     return {
-        "name": "S1",
-        "slab": slab,
-        "stalls": stalls,
-        "aisles": aisles,
-        "count": len(stalls),
-        "rampa": rampa,
-        "nucleo": nucleo_out,
-        "cisternas": cisternas,
+        "name": s1["name"],
+        "slab": s1["slab"],
+        "stalls": s1["stalls"],
+        "aisles": s1["aisles"],
+        "count": s1["count"],
+        "rampa": s1["rampa"],
+        "nucleo": s1["nucleo"],
+        "cisternas": s1["cisternas"],
         "req_estac": req_estac,
         "cisterna_total_m3": round(total_cist, 1),
         "cisterna_domestico": round(dom, 1),
         "cisterna_aci": round(aci_m3, 1),
         "cisterna_maq": round(cuarto_maq, 1),
+        "niveles": niveles,
+        "num_niveles": len(niveles),
+        "count_total": cubiertas,
+        "deficit": max(0, req_estac - cubiertas),
     }
 
 
@@ -4338,6 +4373,21 @@ def _build_webgl_payload(
         "cisterna_domestico": sotano.get("cisterna_domestico", 0),
         "cisterna_aci": sotano.get("cisterna_aci", 0),
         "cisterna_maq": sotano.get("cisterna_maq", 0),
+        "num_niveles": sotano.get("num_niveles", 1),
+        "count_total": sotano.get("count_total", sotano.get("count", 0)),
+        "deficit": sotano.get("deficit", max(0, sotano.get("req_estac", 0) - sotano.get("count", 0))),
+        "niveles": [
+            {
+                "name": nv.get("name"),
+                "stalls": [
+                    {"id": st.get("id"), "coords": norm(st.get("poly", []))}
+                    for st in nv.get("stalls", [])
+                ],
+                "aisles": [norm(a) for a in nv.get("aisles", [])],
+                "count": nv.get("count", 0),
+            }
+            for nv in sotano.get("niveles", [])
+        ],
     }
 
     return {
