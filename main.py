@@ -3763,29 +3763,25 @@ def _generate_azotea(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
             "area_cm_m2":      r3(area_cm),
         }
 
-    # ── Fallback legacy (sin escalera en geometry): quad paramétrico ──
-    frente    = proyecto.frente or 10
-    fondo_val = proyecto.fondo or 10
-    derecha   = proyecto.derecha or 20
-    izquierda = proyecto.izquierda or 20
-    retiro_frontal = proyecto.retiro_frontal
+    # ── Fallback legacy (sin escalera en geometry): marco real del lote
+    # (G6, mismo patrón F1/F4) en vez de quad sintético frente/fondo/
+    # derecha/izquierda ──
+    coords = proyecto.coordenadas_lote
+    if len(coords) != 4:
+        lote_sh = Polygon(coords)
+        if not lote_sh.is_valid:
+            lote_sh = lote_sh.buffer(0)
+        bx0, by0, bx1, by1 = lote_sh.bounds
+        coords = [[bx0, by0], [bx1, by0], [bx1, by1], [bx0, by1]]
+    p1, p2, p3, p4 = ({"x": x, "y": y} for x, y in coords)
+    techada_poly = [p1, p2, p3, p4]
 
-    p1 = {"x": -frente / 2,    "y": 0}
-    p2 = {"x":  frente / 2,    "y": 0}
-    p3 = {"x":  fondo_val / 2, "y": derecha}
-    p4 = {"x": -fondo_val / 2, "y": izquierda}
-
-    rt_y = min(retiro_frontal, derecha, izquierda)
-    if rt_y > 0 and izquierda > 0 and derecha > 0:
-        pr3 = _interpolate(p2, p3, rt_y / derecha)
-        pr4 = _interpolate(p1, p4, rt_y / izquierda)
-        techada_poly = [pr4, pr3, p3, p4]
-    else:
-        techada_poly = [p1, p2, p3, p4]
-
-    retiro_lat  = 2.30
-    frente_neto = max(1.0, frente)
-    fondo_neto  = max(1.0, (derecha + izquierda) / 2)
+    retiro_lat  = float(proyecto.retiro_lateral or 2.30)
+    frente_neto = max(1.0, math.hypot(p2["x"] - p1["x"], p2["y"] - p1["y"]))
+    fondo_neto  = max(1.0, (
+        math.hypot(p4["x"] - p1["x"], p4["y"] - p1["y"]) +
+        math.hypot(p3["x"] - p2["x"], p3["y"] - p2["y"])
+    ) / 2)
     u_left  = 0.0 if proyecto.ciego_izquierda else retiro_lat / frente_neto
     u_right = 1.0 if proyecto.ciego_derecha   else 1.0 - retiro_lat / frente_neto
     v_bot   = 1.0 if proyecto.ciego_fondo     else 1.0 - retiro_lat / fondo_neto
@@ -3830,15 +3826,18 @@ def _generate_azotea(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
 
 
 def _generate_sotano(proyecto: ProyectoInmobiliario, geometry: dict, normativa: dict):
-    frente = proyecto.frente or 10
-    fondo_val = proyecto.fondo or 10
-    derecha = proyecto.derecha or 20
-    izquierda = proyecto.izquierda or 20
-
-    p1 = {"x": -frente / 2, "y": 0}
-    p2 = {"x": frente / 2, "y": 0}
-    p3 = {"x": fondo_val / 2, "y": derecha}
-    p4 = {"x": -fondo_val / 2, "y": izquierda}
+    # G6: marco real del lote (mismo patrón F1/F4) — antes reconstruía un
+    # trapecio sintético desde frente/fondo/derecha/izquierda, desalineado
+    # del marco real que usan planta típica/primer piso (rampa PB↔S1 no
+    # coincidía en lotes no perfectamente rectangulares).
+    coords = proyecto.coordenadas_lote
+    if len(coords) != 4:
+        lote_sh = Polygon(coords)
+        if not lote_sh.is_valid:
+            lote_sh = lote_sh.buffer(0)
+        bx0, by0, bx1, by1 = lote_sh.bounds
+        coords = [[bx0, by0], [bx1, by0], [bx1, by1], [bx0, by1]]
+    p1, p2, p3, p4 = ({"x": x, "y": y} for x, y in coords)
 
     inset = 0.30
     slab = [
