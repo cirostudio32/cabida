@@ -1301,8 +1301,11 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
             "corners": ((u0, yf0), (u1, yf0), (u1, ya), (u0, ya)),
             "lado": "frente", "fachada": bool(proyecto.frente_exterior),
         })
-    # Filas izquierda (wet al corredor, dormitorios a franja izq)
-    _v = yf0 + nuc_l_h + 0.20
+    # Filas izquierda (wet al corredor, dormitorios a franja izq). Arrancan en
+    # yf0 (no tras el núcleo): la franja junto a escalera que el núcleo no
+    # ocupa en X se suma a la primera fila en vez de quedar remanente muerto
+    # (G2); el propio núcleo se recorta después vía difference(core_union).
+    _v = yf0
     _h_l = (yb0 - _v) / filas_l if filas_l > 0 else 0.0
     for j in range(filas_l):
         r0, r1 = _v + j * _h_l, _v + (j + 1) * _h_l
@@ -1311,7 +1314,7 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
             "lado": "intermedio", "fachada": False,
         })
     # Filas derecha
-    _v = yf0 + nuc_r_h + (0.20 if nuc_r_h > 0 else 0.0)
+    _v = yf0
     _h_r = (yb0 - _v) / filas_r if filas_r > 0 else 0.0
     for j in range(filas_r):
         r0, r1 = _v + j * _h_r, _v + (j + 1) * _h_r
