@@ -64,7 +64,9 @@ def _pts_to_poly(pts):
 def _build_footprint(geometry):
     """Unión de todos los polígonos techados → shapely Polygon."""
     parts = []
-    for key in ("hall", "core", "vestibulo", "escalera"):
+    # "patio" cuenta como área diseñada (área libre intencional, no hueco);
+    # el motor lo emite clipeado al lote útil, nunca invade retiros.
+    for key in ("hall", "core", "vestibulo", "escalera", "patio"):
         p = _pts_to_poly(geometry.get(key, []))
         if p:
             parts.append(p)
@@ -172,14 +174,23 @@ def metric_pct_circulacion(geometry, footprint):
 
 
 def metric_eficiencia(geometry, footprint):
-    """Sum net dpto areas / footprint.area * 100."""
+    """Sum net dpto areas / área techada (footprint − patio) * 100."""
     if footprint is None or footprint.area <= 0:
         return 0.0
     total = sum(
         (d.get("area_m2", 0) if isinstance(d, dict) else 0)
         for d in geometry.get("departamentos", [])
     )
-    return round(total / footprint.area * 100, 1)
+    techada = footprint
+    patio = _pts_to_poly(geometry.get("patio", []))
+    if patio:
+        try:
+            techada = footprint.difference(patio)
+        except Exception:
+            pass
+    if techada.area <= 0:
+        return 0.0
+    return round(total / techada.area * 100, 1)
 
 
 def metric_huecos(footprint, lote_util, geometry=None):

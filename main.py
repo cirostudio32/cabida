@@ -1181,21 +1181,26 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
     # Bloques frente/fondo con crujía real 8.2m; el excedente de profundidad
     # va al patio posterior (área libre), no a inflar unidades.
     best = None
-    for n_m_try in range(0, 9):
-        _a, _b_ = (n_m_try + 1) // 2, n_m_try // 2
-        for (fl, fr) in {(_a, _b_), (_b_, _a)}:
-            Dm_try = max(nuc_l_h + fl * h_fila, nuc_r_h + fr * h_fila, ESC_L)
-            if Dm_try > D_use - 2 * DEPTH_MIN + 1e-9:
-                continue
-            # E1: sin cap de profundidad — dptos llenan el lote_util completo
-            Df_try = Db_try = (D_use - Dm_try) / 2
-            n_f = 2 if (W / 2.0 >= 4.2 and (W / 2.0) * Df_try >= min_area_dpto * 1.05) else 1
-            n_b = 2 if (W / 2.0 >= 4.2 and (W / 2.0) * Db_try >= min_area_dpto * 1.05) else 1
-            tot = min(num_dptos, n_f + n_b + n_m_try)
-            # max logrado; luego menor sobre-capacidad; luego núcleo más compacto
-            key = (tot, -(n_f + n_b + n_m_try), -Dm_try)
-            if best is None or key > best[0]:
-                best = (key, fl, fr, Df_try, Db_try, n_f, n_b)
+    # F6: crujía calibrada (DXF Lima 7.7-8.2m) — el sobrante de profundidad
+    # pasa a patio posterior, no infla los dptos. Escalación: si con la
+    # crujía calibrada no se alcanza num_dptos, se relaja el cap.
+    for _cap in (DEPTH_T, DEPTH_MAX, float("inf")):
+        for n_m_try in range(0, 9):
+            _a, _b_ = (n_m_try + 1) // 2, n_m_try // 2
+            for (fl, fr) in {(_a, _b_), (_b_, _a)}:
+                Dm_try = max(nuc_l_h + fl * h_fila, nuc_r_h + fr * h_fila, ESC_L)
+                if Dm_try > D_use - 2 * DEPTH_MIN + 1e-9:
+                    continue
+                Df_try = Db_try = min(_cap, (D_use - Dm_try) / 2)
+                n_f = 2 if (W / 2.0 >= 4.2 and (W / 2.0) * Df_try >= min_area_dpto * 1.05) else 1
+                n_b = 2 if (W / 2.0 >= 4.2 and (W / 2.0) * Db_try >= min_area_dpto * 1.05) else 1
+                tot = min(num_dptos, n_f + n_b + n_m_try)
+                # max logrado; luego menor sobre-capacidad; luego núcleo más compacto
+                key = (tot, -(n_f + n_b + n_m_try), -Dm_try)
+                if best is None or key > best[0]:
+                    best = (key, fl, fr, Df_try, Db_try, n_f, n_b)
+        if best is not None and best[0][0] >= num_dptos:
+            break
     if best is None:
         return None, None
     _, filas_l, filas_r, Df, Db, n_f_cap, n_b_cap = best
@@ -1429,12 +1434,12 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
         return None, None
 
     patio_poly = None
-    _lb = lote.bounds
-    if (_lb[3] - y_end) > 0.30:
-        # patio visual hasta la línea de propiedad real (incluye el retiro)
+    if (yb - y_end) > 0.30:
+        # patio dentro del lote útil (la banda de retiro posterior queda
+        # fuera: el patio cuenta como área diseñada, el retiro no)
         patio_poly = safe_clip(Polygon([
-            (_lb[0], y_end), (_lb[2], y_end), (_lb[2], _lb[3]), (_lb[0], _lb[3]),
-        ]), lote)
+            (xa, y_end), (xb, y_end), (xb, yb), (xa, yb),
+        ]), lote_util)
 
     # Columnas en intersecciones de ejes
     COL_H = 0.25
@@ -1570,6 +1575,7 @@ def _generate_hall_compacto(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
     # ── Núcleo: escalera + ascensores en columna a la medianera izquierda ──
     Lc = ESC_L + (num_asc * (asc_l + 0.20) if num_asc > 0 else 0.0)
     DF_MIN, DF_MAX = 5.5, 11.0
+    DF_CAL = 8.20  # F6: crujía calibrada (DXF Lima 7.7-8.2m); sobrante → patio
 
     # Lote poco profundo: núcleo posterior (escalera al fondo, patrón micro-lote)
     nucleo_posterior = D_use < DF_MIN + Lc
@@ -1602,39 +1608,44 @@ def _generate_hall_compacto(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
         db_exists = True
         best = None
         max_rows = max(0, int((D_use - 2 * DF_MIN - HALL_W * 2) // 3.0))
-        for n_m_try in range(0, max_rows + 1):
-            Wm_eff = Wm_est - (pz_franja if n_m_try > 0 else 0.0)
-            if n_m_try > 0 and Wm_eff < 4.5:
-                break
-            h_fila = max(3.0, min_area_dpto * 1.05 / max(Wm_eff, 3.0))
-            Dm_try = max(Lc, HALL_W * 2 + n_m_try * h_fila)
-            if Dm_try > D_use - 2 * DF_MIN + 1e-9:
-                continue
-            # E1: sin cap — dptos llenan lote_util completo
-            Df_try = Db_try = (D_use - Dm_try) / 2
-            Dm_eff = D_use - 2 * Df_try
-            _mid_d = Dm_eff - HALL_W * 2
-            if n_m_try > 0:
-                _base = _mid_d / n_m_try
-                if _base < 3.0 or _base * Wm_eff < min_area_dpto * 1.05 - 1e-6:
+        # F6: crujía calibrada — sobrante de profundidad pasa a patio
+        # posterior (y_end < yb), no infla dptos ni la zona media. Escalación:
+        # si con la crujía calibrada no se alcanza num_dptos, se relaja el cap
+        # (honrar nd pedido manda sobre la calibración).
+        for _cap in (DF_CAL, 9.5, float("inf")):
+            for n_m_try in range(0, max_rows + 1):
+                Wm_eff = Wm_est - (pz_franja if n_m_try > 0 else 0.0)
+                if n_m_try > 0 and Wm_eff < 4.5:
+                    break
+                h_fila = max(3.0, min_area_dpto * 1.05 / max(Wm_eff, 3.0))
+                Dm_try = max(Lc, HALL_W * 2 + n_m_try * h_fila)
+                if Dm_try > D_use - 2 * DF_MIN + 1e-9:
                     continue
-            _bite = _bite_blk if n_m_try > 0 else _pozo_loss
-            nf = _block_cap_d(W, Df_try, _bite)   # muesca de franja / junta derecha
-            nb = _block_cap_d(W, Db_try, _bite)
-            tot = min(num_dptos, nf + nb + n_m_try)
-            # max dptos logrados; a igualdad, mínimas filas medias (corredor más corto)
-            key = (tot, -n_m_try)
-            if best is None or key > best[0]:
-                best = (key, n_m_try, Df_try, Db_try, nf, nb)
+                Df_try = Db_try = min(_cap, (D_use - Dm_try) / 2)
+                Dm_eff = Dm_try
+                _mid_d = Dm_eff - HALL_W * 2
+                if n_m_try > 0:
+                    _base = _mid_d / n_m_try
+                    if _base < 3.0 or _base * Wm_eff < min_area_dpto * 1.05 - 1e-6:
+                        continue
+                _bite = _bite_blk if n_m_try > 0 else _pozo_loss
+                nf = _block_cap_d(W, Df_try, _bite)   # muesca de franja / junta derecha
+                nb = _block_cap_d(W, Db_try, _bite)
+                tot = min(num_dptos, nf + nb + n_m_try)
+                # max dptos logrados; a igualdad, mínimas filas medias (corredor más corto)
+                key = (tot, -n_m_try)
+                if best is None or key > best[0]:
+                    best = (key, n_m_try, Df_try, Db_try, nf, nb, Dm_try)
+            if best is not None and best[0][0] >= num_dptos:
+                break
         if best is None:
             return None, None
-        _, n_m_sel, Df, Db, n_f_cap, n_b_cap = best
-        Dm = D_use - Df - Db
+        _, n_m_sel, Df, Db, n_f_cap, n_b_cap, Dm = best
     else:
         db_exists = False
         Dm_min = max(Lc, HALL_W + 3.2)
-        Df = D_use - Dm_min   # E1: sin cap — llena disponible
-        Dm = D_use - Df
+        Df = min(DF_CAL, D_use - Dm_min)   # F6: crujía calibrada
+        Dm = Dm_min
         Db = 0.0
 
     vm0 = ya + Df          # inicio zona media (línea de hall)
@@ -2038,7 +2049,8 @@ def _evaluar_diseno(geometry: dict, lote_poly: Polygon, r_lat: float, r_pos: flo
 
     # ── Footprint ──────────────────────────────────────────────
     fp_parts: list = []
-    for key in ("hall", "core", "vestibulo", "escalera"):
+    # "patio" cuenta como área diseñada (área libre intencional, no hueco)
+    for key in ("hall", "core", "vestibulo", "escalera", "patio"):
         pts = geometry.get(key, [])
         if pts and len(pts) >= 3:
             try:
@@ -2160,6 +2172,8 @@ def _evaluar_diseno(geometry: dict, lote_poly: Polygon, r_lat: float, r_pos: flo
                          "descripcion": f"Circulación {pct_circ}% > 12%"})
 
     # ── Eficiencia ─────────────────────────────────────────────
+    # denominador = área techada: el patio (área libre diseñada) integra el
+    # footprint para huecos/retiros pero no es construido — se descuenta
     efi = 0.0
     if footprint is not None and footprint.area > 0:
         vendible = 0.0
@@ -2167,7 +2181,16 @@ def _evaluar_diseno(geometry: dict, lote_poly: Polygon, r_lat: float, r_pos: flo
             area = dpto.get("area_m2") if isinstance(dpto, dict) else 0.0
             if area:
                 vendible += float(area)
-        efi = round(vendible / footprint.area * 100, 1)
+        techada = footprint
+        patio_pts = geometry.get("patio", [])
+        if patio_pts and len(patio_pts) >= 3:
+            try:
+                techada = footprint.difference(
+                    Polygon([(c["x"], c["y"]) for c in patio_pts]).buffer(0))
+            except Exception:
+                pass
+        if techada.area > 0:
+            efi = round(vendible / techada.area * 100, 1)
     metricas["eficiencia"] = efi
     if efi < 60.0 and efi > 0:
         defectos.append({"tipo": "eficiencia", "severidad": "critico",
