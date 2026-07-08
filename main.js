@@ -663,8 +663,8 @@ const initApp = () => {
         techadaPoly = rtY > 0 ? [pr4, pr3, p3, p4] : [p1, p2, p3, p4];
 
         // === FASE 2: Lote Neto (offset por retiros laterales A.010) ===
-        // Si un lateral NO tiene Muro Ciego → aplica retiro de 2.30m
-        let retiroLat = 2.30; // Norma A.010
+        // Si un lateral NO tiene Muro Ciego → aplica retiro definido por el usuario
+        let retiroLat = params.retiroLateral;
         let frenteNeto = Math.max(1, params.frente);
         let fondoNeto = Math.max(1, (params.derecha + params.izquierda) / 2);
 
@@ -1511,7 +1511,9 @@ const initApp = () => {
         const esquemaAreaLibre = esquemaMap[distribSel?.value] || 'muros_ciegos';
         const optDensidad = !!document.getElementById('optimizar-densidad')?.checked;
         const datos = {
-            coordenadas_lote: customLoteCoords || (loteNetoPoly.length > 0 ? loteNetoPoly.map(p => [p.x, p.y]) : polygon.map(p => [p.x, p.y])),
+            // Solo retiro frontal neto: laterales/posterior los aplica el backend UNA vez (_erode_lote).
+            // Enviar loteNetoPoly aquí duplicaría el retiro lateral/posterior (ya erosionado dos veces).
+            coordenadas_lote: customLoteCoords || (techadaPoly.length > 0 ? techadaPoly.map(p => [p.x, p.y]) : polygon.map(p => [p.x, p.y])),
             area_bruta_terreno: calc.areaTerreno,
             numero_pisos: params.pisos || 7,
             retiro_frontal: params.retiroFrontal || 0.0,

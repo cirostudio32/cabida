@@ -3897,21 +3897,24 @@ def _build_webgl_payload(
     y estructura semántica lista para consumo WebGL / Three.js.
     """
 
-    # ── Polígono del lote para calcular centroide de normalización ──
+    # ── Polígono REAL del lote recibido (frente ya neto por convención del
+    # caller) — única fuente para dibujar lote/retiro/torre. Antes se
+    # reconstruía un trapecio sintético desde frente/fondo/derecha/izquierda,
+    # que solo coincidía con el lote real en el caso rectangular por defecto
+    # y desalineaba la torre en lotes de mapa/dibujados/irregulares. ──
     frente = proyecto.frente or 10
     fondo_val = proyecto.fondo or 10
     derecha = proyecto.derecha or 20
     izquierda = proyecto.izquierda or 20
 
-    p1 = {"x": -frente / 2, "y": 0}
-    p2 = {"x": frente / 2, "y": 0}
-    p3 = {"x": fondo_val / 2, "y": derecha}
-    p4 = {"x": -fondo_val / 2, "y": izquierda}
-    lote_pts = [p1, p2, p3, p4]
+    lote_real = Polygon(proyecto.coordenadas_lote)
+    if not lote_real.is_valid:
+        lote_real = lote_real.buffer(0)
+    lote_pts = [{"x": x, "y": y} for x, y in list(lote_real.exterior.coords)[:-1]]
 
-    # Centroide del lote para normalizar a (0,0)
-    cx_norm = sum(p["x"] for p in lote_pts) / 4
-    cy_norm = sum(p["y"] for p in lote_pts) / 4
+    # Centroide del lote real para normalizar a (0,0)
+    cx_norm = lote_real.centroid.x
+    cy_norm = lote_real.centroid.y
 
     def norm(pts):
         """[{x,y},...] → [[x-cx, y-cy],...] normalized + rounded."""
@@ -3928,18 +3931,38 @@ def _build_webgl_payload(
     # ── Lote y retiro ──
     lote_coords = norm(lote_pts)
 
+    # Banda de retiro frontal: extrusión hacia afuera del borde de frente
+    # real (el lote recibido ya viene neto de este retiro) — no un
+    # interpolado sobre corners sintéticos.
     retiro_pts = []
-    rt_y = min(proyecto.retiro_frontal, derecha, izquierda)
-    if rt_y > 0:
-        u_l = rt_y / izquierda if izquierda > 0 else 0
-        u_r = rt_y / derecha if derecha > 0 else 0
-        pr3 = _interpolate(p2, p3, u_r)
-        pr4 = _interpolate(p1, p4, u_l)
-        retiro_pts = norm([p1, p2, pr3, pr4])
+    r_front = float(proyecto.retiro_frontal or 0.0)
+    if r_front > 0 and len(lote_pts) >= 3:
+        coords = [(p["x"], p["y"]) for p in lote_pts]
+        n = len(coords)
+        best = None
+        for i in range(n):
+            x1, y1 = coords[i]
+            x2, y2 = coords[(i + 1) % n]
+            mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+            if best is None or my < best[0]:
+                ex, ey = x2 - x1, y2 - y1
+                L = math.hypot(ex, ey) or 1.0
+                ex, ey = ex / L, ey / L
+                inx, iny = -ey, ex
+                if (cx_norm - mx) * inx + (cy_norm - my) * iny < 0:
+                    inx, iny = -inx, -iny  # inx,iny apunta hacia adentro
+                best = (my, (x1, y1), (x2, y2), (-inx, -iny))
+        if best is not None:
+            _, (x1, y1), (x2, y2), (onx, ony) = best
+            band = [
+                (x1, y1), (x2, y2),
+                (x2 + onx * r_front, y2 + ony * r_front),
+                (x1 + onx * r_front, y1 + ony * r_front),
+            ]
+            retiro_pts = norm([{"x": x, "y": y} for x, y in band])
 
     # ── Área del terreno ──
-    lote_shapely = Polygon(proyecto.coordenadas_lote)
-    area_terreno = r3(lote_shapely.area)
+    area_terreno = r3(lote_real.area)
 
     # ── Unidades (departamentos) ──
     hall_coords_norm = norm(geometry.get("hall", []))
@@ -4088,13 +4111,17 @@ def _build_webgl_payload(
 
     # ── Anotaciones (cotas y etiquetas) ──
     anotaciones = []
-    # Cotas del terreno
-    side_labels = [
-        (lote_coords[0], lote_coords[1], f"{frente:.1f}m (Fte)", "cota"),
-        (lote_coords[1], lote_coords[2], f"{derecha:.1f}m (Der)", "cota"),
-        (lote_coords[2], lote_coords[3], f"{fondo_val:.1f}m (Fdo)", "cota"),
-        (lote_coords[3], lote_coords[0], f"{izquierda:.1f}m (Izq)", "cota"),
-    ]
+    # Cotas del terreno — solo si el lote real es un cuadrilátero (frente/
+    # derecha/fondo/izquierda solo tienen sentido en ese caso; en lotes
+    # irregulares se omiten en vez de rotular con lados que no existen)
+    side_labels = []
+    if len(lote_coords) == 4:
+        side_labels = [
+            (lote_coords[0], lote_coords[1], f"{frente:.1f}m (Fte)", "cota"),
+            (lote_coords[1], lote_coords[2], f"{derecha:.1f}m (Der)", "cota"),
+            (lote_coords[2], lote_coords[3], f"{fondo_val:.1f}m (Fdo)", "cota"),
+            (lote_coords[3], lote_coords[0], f"{izquierda:.1f}m (Izq)", "cota"),
+        ]
     for pa, pb, txt, clase in side_labels:
         mid = [r3((pa[0] + pb[0]) / 2), r3((pa[1] + pb[1]) / 2)]
         anotaciones.append({"pos": mid, "texto": txt, "clase": clase})
