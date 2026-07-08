@@ -1629,6 +1629,127 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
 
 
 # ═══════════════════════════════════════════════════════════════
+# TOPOLOGÍA COSTILLAS — DOS NÚCLEOS (P1: ancho >24m o fondo >38m)
+# Dos torres tipo-costillas independientes con patio central y junta
+# constructiva. Reusa _generate_costillas dos veces sobre sub-lotes ya
+# eroded (retiros reales aplicados una sola vez, sobre el lote completo)
+# para no duplicar la lógica de generación por fila/pozo/hall.
+# ═══════════════════════════════════════════════════════════════
+DOS_NUCLEOS_W_MIN = 24.0
+PATIO_CENTRAL_GAP = 3.0  # ancho del patio/junta entre torres
+
+
+def _generate_costillas_dos_nucleos(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
+                                     half_L, half_S, hw,
+                                     num_dptos, num_asc, nec_esc_prot, nec_ascensor,
+                                     pozo_final, h_edif):
+    r_lat = float(proyecto.retiro_lateral or 0.0)
+    r_pos = float(proyecto.retiro_posterior or 0.0)
+    lote_util = _erode_lote(lote, r_lat, r_pos) or lote
+    bx0, by0, bx1, by1 = lote_util.bounds
+    W = bx1 - bx0
+    if W < DOS_NUCLEOS_W_MIN:
+        return None, None
+
+    mid_x = (bx0 + bx1) / 2
+    xl_cut = mid_x - PATIO_CENTRAL_GAP / 2
+    xr_cut = mid_x + PATIO_CENTRAL_GAP / 2
+    K = 10000.0
+    half_izq = Polygon([(bx0 - K, by0 - K), (xl_cut, by0 - K), (xl_cut, by1 + K), (bx0 - K, by1 + K)])
+    half_der = Polygon([(xr_cut, by0 - K), (bx1 + K, by0 - K), (bx1 + K, by1 + K), (xr_cut, by1 + K)])
+    lote_l = safe_clip(half_izq, lote_util)
+    lote_r = safe_clip(half_der, lote_util)
+    if lote_l is None or lote_l.is_empty or lote_r is None or lote_r.is_empty:
+        return None, None
+    Wl = lote_l.bounds[2] - lote_l.bounds[0]
+    Wr = lote_r.bounds[2] - lote_r.bounds[0]
+    if Wl < 13.0 or Wr < 13.0:
+        return None, None  # cada torre necesita el mínimo de costillas por sí sola
+
+    # Retiros ya aplicados sobre lote_util antes del corte: cada sub-torre
+    # recibe retiro 0 para no erosionar de nuevo (incluyendo el corte central,
+    # que es junta constructiva, no medianera con retiro).
+    try:
+        proyecto_sub = proyecto.model_copy(update={"retiro_lateral": 0.0, "retiro_posterior": 0.0})
+    except AttributeError:  # pydantic v1
+        proyecto_sub = proyecto.copy(update={"retiro_lateral": 0.0, "retiro_posterior": 0.0})
+
+    nd_l = round(num_dptos * Wl / (Wl + Wr))
+    nd_l = max(1, min(num_dptos - 1, nd_l))
+    nd_r = num_dptos - nd_l
+    asc_l_n = 1 if nec_ascensor else 0
+    asc_r_n = 1 if nec_ascensor else 0
+
+    args_l = (proyecto_sub, lote_l, cx, cy, dl_x, dl_y, ds_x, ds_y, half_L, half_S, hw,
+              nd_l, asc_l_n, nec_esc_prot, nec_ascensor, pozo_final, h_edif)
+    args_r = (proyecto_sub, lote_r, cx, cy, dl_x, dl_y, ds_x, ds_y, half_L, half_S, hw,
+              nd_r, asc_r_n, nec_esc_prot, nec_ascensor, pozo_final, h_edif)
+    g_l, n_l = _generate_costillas(*args_l)
+    g_r, n_r = _generate_costillas(*args_r)
+    if g_l is None or g_r is None:
+        return None, None
+
+    patio_central = safe_clip(Polygon([
+        (xl_cut, by0), (xr_cut, by0), (xr_cut, by1), (xl_cut, by1),
+    ]), lote_util)
+
+    geometry = {
+        "hall": g_l["hall"],
+        "halls": [g_l["hall"], g_r["hall"]],
+        "core": g_l["core"],
+        "cores": [g_l["core"], g_r["core"]],
+        "escalera": g_l["escalera"],
+        "escaleras": [g_l["escalera"], g_r["escalera"]],
+        "ascensores": g_l["ascensores"] + g_r["ascensores"],
+        "vestibulo": g_l["vestibulo"] or g_r["vestibulo"],
+        "patio": g_l["patio"] or g_r["patio"],
+        "patio_central": poly_to_js(patio_central) if patio_central else [],
+        "ductos": g_l["ductos"] + g_r["ductos"],
+        "remanentes_zona_media": g_l["remanentes_zona_media"] + g_r["remanentes_zona_media"],
+        "pozos_luz": g_l["pozos_luz"] + g_r["pozos_luz"],
+        "pozos_luz_cumple": g_l["pozos_luz_cumple"] + g_r["pozos_luz_cumple"],
+        "columnas": g_l["columnas"] + g_r["columnas"],
+        "esquema_area_libre": "costillas_dos_nucleos",
+        "departamentos": g_l["departamentos"] + g_r["departamentos"],
+        "cabida_multifamiliar": {
+            "contexto": "Perú — costillas dos núcleos: dos torres independientes con patio central y junta constructiva (P1, ancho >24m)",
+            "area_min_dpto_m2": g_l["cabida_multifamiliar"]["area_min_dpto_m2"],
+            "departamentos_solicitados_planta": num_dptos,
+            "capacidad_maxima_estimada_planta": (g_l["cabida_multifamiliar"]["capacidad_maxima_estimada_planta"]
+                                                  + g_r["cabida_multifamiliar"]["capacidad_maxima_estimada_planta"]),
+            "departamentos_generados_planta": len(g_l["departamentos"]) + len(g_r["departamentos"]),
+            "nota": "Dos torres tipo-costillas separadas por patio central (junta constructiva); cada una con núcleo propio.",
+        },
+        "topologia": g_l["topologia"],
+    }
+    normativa = {
+        "pozo_final": r3(pozo_final),
+        "pozos_luz_check": {
+            "colocados": len(geometry["pozos_luz"]),
+            "conformes": sum(1 for ok in geometry["pozos_luz_cumple"] if ok),
+            "no_conformes": sum(1 for ok in geometry["pozos_luz_cumple"] if not ok),
+            "ok": all(geometry["pozos_luz_cumple"]),
+            "nota": "Dos torres, franjas de pozo continuas por torre en ambas medianeras.",
+        },
+        "ascensor_obligatorio": nec_ascensor,
+        "esc_protegida_obligatoria": nec_esc_prot,
+        "evacuacion_max": RNE["circulacion_v"]["evacuacion_max"],
+        "area_min_dpto": n_l["area_min_dpto"],
+        "dotaciones": RNE["instalaciones"],
+        "estacionamiento_ancho": RNE["estacionamientos"]["ancho_ind"],
+        "cabida_planta": {
+            "departamentos_pedidos": num_dptos,
+            "departamentos_emitidos": len(geometry["departamentos"]),
+            "capacidad_max_estimada_planta": geometry["cabida_multifamiliar"]["capacidad_maxima_estimada_planta"],
+            "descartados_sin_acceso": (n_l["cabida_planta"]["descartados_sin_acceso"]
+                                        + n_r["cabida_planta"]["descartados_sin_acceso"]),
+        },
+        "topologia": g_l["topologia"],
+    }
+    return geometry, normativa
+
+
+# ═══════════════════════════════════════════════════════════════
 # TOPOLOGÍA HALL COMPACTO — patrón Lima moderna entre medianeras
 # ═══════════════════════════════════════════════════════════════
 # Planta típica real: bloque de dptos al frente (fachada a calle),
@@ -2159,18 +2280,26 @@ def _evaluar_diseno(geometry: dict, lote_poly: Polygon, r_lat: float, r_pos: flo
     defectos: list = []
     metricas: dict = {}
 
+    def _geom_polys(key: str) -> list:
+        """Polígonos para 'key' (singular) + variante plural 'keys' (lista) —
+        topologías multi-núcleo (p.ej. costillas_dos_nucleos) emiten varias
+        instancias del mismo elemento (halls/cores/escaleras)."""
+        polys: list = []
+        for pts in [geometry.get(key, [])] + list(geometry.get(key + "s", [])):
+            if pts and len(pts) >= 3:
+                try:
+                    p = Polygon([(c["x"], c["y"]) for c in pts])
+                    if not p.is_empty:
+                        polys.append(p)
+                except Exception:
+                    pass
+        return polys
+
     # ── Footprint ──────────────────────────────────────────────
     fp_parts: list = []
-    # "patio" cuenta como área diseñada (área libre intencional, no hueco)
-    for key in ("hall", "core", "vestibulo", "escalera", "patio"):
-        pts = geometry.get(key, [])
-        if pts and len(pts) >= 3:
-            try:
-                p = Polygon([(c["x"], c["y"]) for c in pts])
-                if not p.is_empty:
-                    fp_parts.append(p)
-            except Exception:
-                pass
+    # "patio"/"patio_central" cuentan como área diseñada (área libre intencional, no hueco)
+    for key in ("hall", "core", "vestibulo", "escalera", "patio", "patio_central"):
+        fp_parts.extend(_geom_polys(key))
     for grp in ("corridors", "ascensores"):
         for item in geometry.get(grp, []):
             if item and len(item) >= 3:
@@ -2253,14 +2382,7 @@ def _evaluar_diseno(geometry: dict, lote_poly: Polygon, r_lat: float, r_pos: flo
     if footprint is not None and footprint.area > 0:
         circ_pts: list = []
         for key in ("hall", "vestibulo"):
-            pts = geometry.get(key, [])
-            if pts and len(pts) >= 3:
-                try:
-                    p = Polygon([(c["x"], c["y"]) for c in pts])
-                    if not p.is_empty:
-                        circ_pts.append(p)
-                except Exception:
-                    pass
+            circ_pts.extend(_geom_polys(key))
         for item in geometry.get("corridors", []):
             if item and len(item) >= 3:
                 try:
@@ -2314,14 +2436,7 @@ def _evaluar_diseno(geometry: dict, lote_poly: Polygon, r_lat: float, r_pos: flo
     # ── Acceso ─────────────────────────────────────────────────
     dptos = geometry.get("departamentos", [])
     acc_ok = 0
-    hall_poly: Optional[Polygon] = None
-    hall_pts = geometry.get("hall", [])
-    if hall_pts and len(hall_pts) >= 3:
-        try:
-            hall_poly = Polygon([(c["x"], c["y"]) for c in hall_pts])
-        except Exception:
-            pass
-    circ_polys: list = [hall_poly] if hall_poly else []
+    circ_polys: list = _geom_polys("hall")
     for item in geometry.get("corridors", []):
         if item and len(item) >= 3:
             try:
@@ -2529,6 +2644,16 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
         return g, n
 
     if _topo_s["recomendada"] == "hall_compacto":
+        # 0º: dos núcleos (P1: ancho útil >24m) — dos torres costillas con
+        # patio central y junta constructiva, cada una con núcleo propio.
+        _r_lat_dn = float(proyecto.retiro_lateral or 0.0)
+        _r_pos_dn = float(proyecto.retiro_posterior or 0.0)
+        _lu_dn = _erode_lote(lote, _r_lat_dn, _r_pos_dn) or lote
+        _W_dn = _lu_dn.bounds[2] - _lu_dn.bounds[0]
+        if _W_dn >= DOS_NUCLEOS_W_MIN:
+            _g, _n = _generate_costillas_dos_nucleos(*_args)
+            if _g is not None:
+                return _emit(_g, _n, "costillas_dos_nucleos")
         # 1º: costillas (corredor central, patrón ref 9) para lotes ≥13m ancho
         _g, _n = _generate_costillas(*_args)
         if _g is not None:

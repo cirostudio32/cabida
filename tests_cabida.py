@@ -62,15 +62,26 @@ def _pts_to_poly(pts):
         return None
 
 
+def _geom_polys(geometry, key):
+    """Polígonos para 'key' (singular) + variante plural 'keys' (lista) —
+    topologías multi-núcleo (p.ej. costillas_dos_nucleos) emiten varias
+    instancias del mismo elemento (halls/cores/escaleras)."""
+    polys = []
+    for pts in [geometry.get(key, [])] + list(geometry.get(key + "s", [])):
+        p = _pts_to_poly(pts)
+        if p:
+            polys.append(p)
+    return polys
+
+
 def _build_footprint(geometry):
     """Unión de todos los polígonos techados → shapely Polygon."""
     parts = []
-    # "patio" cuenta como área diseñada (área libre intencional, no hueco);
-    # el motor lo emite clipeado al lote útil, nunca invade retiros.
-    for key in ("hall", "core", "vestibulo", "escalera", "patio"):
-        p = _pts_to_poly(geometry.get(key, []))
-        if p:
-            parts.append(p)
+    # "patio"/"patio_central" cuentan como área diseñada (área libre
+    # intencional, no hueco); el motor lo emite clipeado al lote útil,
+    # nunca invade retiros.
+    for key in ("hall", "core", "vestibulo", "escalera", "patio", "patio_central"):
+        parts.extend(_geom_polys(geometry, key))
     for c in geometry.get("corridors", []):
         p = _pts_to_poly(c)
         if p:
@@ -159,9 +170,7 @@ def metric_pct_circulacion(geometry, footprint):
         return 0.0
     circ = []
     for key in ("hall", "vestibulo"):
-        p = _pts_to_poly(geometry.get(key, []))
-        if p:
-            circ.append(p)
+        circ.extend(_geom_polys(geometry, key))
     for c in geometry.get("corridors", []):
         p = _pts_to_poly(c)
         if p:
@@ -183,10 +192,11 @@ def metric_eficiencia(geometry, footprint):
         for d in geometry.get("departamentos", [])
     )
     techada = footprint
-    patio = _pts_to_poly(geometry.get("patio", []))
-    if patio:
+    patios = [_pts_to_poly(geometry.get("patio", [])), _pts_to_poly(geometry.get("patio_central", []))]
+    patios = [p for p in patios if p]
+    if patios:
         try:
-            techada = footprint.difference(patio)
+            techada = footprint.difference(unary_union(patios))
         except Exception:
             pass
     if techada.area <= 0:
@@ -222,8 +232,7 @@ def metric_huecos(footprint, lote_util, geometry=None):
 
 def metric_acceso(geometry):
     """% dptos con contacto ≥1.2m al hall/corredor. Devuelve (ok, total)."""
-    hall_p = _pts_to_poly(geometry.get("hall", []))
-    circ_polys = [hall_p.buffer(0.08)] if hall_p else []
+    circ_polys = [p.buffer(0.08) for p in _geom_polys(geometry, "hall")]
     for c in geometry.get("corridors", []):
         p = _pts_to_poly(c)
         if p:
@@ -557,6 +566,8 @@ CASOS = [
     _make_caso("REGLAS_15x31_nd6",   15,   15, 31,   31,   6),
     _make_caso("REGLAS_17x31_nd6",   17,   17, 31,   31,   6),
     _make_caso("REGLAS_12x30_nd4",   12.5, 12.5, 30.5, 30.5, 4),
+    # ── Ancho >24m (P1: dos núcleos / dos torres, REGLAS_DISENO.md) ────────
+    _make_caso("ANCHO_40x30_nd10",   40,   40,   30,   30,   10),
 ]
 
 
