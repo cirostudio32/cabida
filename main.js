@@ -903,6 +903,27 @@ const initApp = () => {
         return true;
     }
 
+    // Renderiza resultado.diseno (evaluación server-side de main.py _evaluar_diseno)
+    // sin fusionar con la auditoría cliente-side existente (H4: mostrar ambos).
+    function renderBackendEvaluacion(diseno) {
+        let panel = document.getElementById('backend-eval-panel');
+        if (!panel) return;
+        if (!diseno || typeof diseno.score !== 'number') {
+            panel.style.display = 'none';
+            return;
+        }
+        let defectos = diseno.defectos || [];
+        let sevIcon = s => s === 'critico' ? '🔴' : '🟡';
+        let rows = defectos.map(d =>
+            `<div style="margin-top:4px;">${sevIcon(d.severidad)} <strong>${d.tipo}</strong>: ${d.descripcion}</div>`
+        ).join('') || '<div style="margin-top:4px;color:#16a34a;">Sin defectos detectados.</div>';
+        panel.innerHTML = `
+            <div style="font-weight:700;margin-bottom:4px;">Evaluación motor (score ${diseno.score}/100)</div>
+            ${rows}
+        `;
+        panel.style.display = 'block';
+    }
+
     function updateCompliancePanel() {
         let panel = document.getElementById('compliance-panel');
         if (!panel) return;
@@ -1607,6 +1628,8 @@ const initApp = () => {
                     eEscalera.innerText = resultado.normativa_estricta.esc_protegida_obligatoria
                         ? 'Presurizada 🔒' : 'Abierta ✓';
                 }
+
+                renderBackendEvaluacion(resultado.diseno);
 
                 // ═══ INYECCIÓN DE GEOMETRÍA (para datos/tablas) ═══
                 if (resultado.geometria_generada) {
