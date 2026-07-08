@@ -3742,6 +3742,50 @@ def _generate_sotano(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
         {"x": p4["x"] + inset, "y": p4["y"] - inset},
     ]
 
+    xs = [p["x"] for p in slab]
+    ys = [p["y"] for p in slab]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+
+    RAMPA_W = 3.0
+    rampa = [
+        {"x": round(min_x, 3), "y": round(min_y, 3)},
+        {"x": round(min_x + RAMPA_W, 3), "y": round(min_y, 3)},
+        {"x": round(min_x + RAMPA_W, 3), "y": round(max_y, 3)},
+        {"x": round(min_x, 3), "y": round(max_y, 3)},
+    ]
+    rampa_poly = Polygon([(p["x"], p["y"]) for p in rampa])
+
+    # ── Núcleo: continuidad vertical real — reutiliza escalera+ascensores+
+    # vestíbulo de la planta típica (mismo marco de coordenadas para el caso
+    # de lote rectangular estándar; ver limitación conocida para lotes
+    # irregulares en la nota F1) en vez de dejar el sótano sin salida ──
+    nucleo_raw = []
+    esc = geometry.get("escalera") or []
+    if len(esc) >= 3:
+        nucleo_raw.append(esc)
+    for a in geometry.get("ascensores", []):
+        if a and len(a) >= 3:
+            nucleo_raw.append(a)
+    vest = geometry.get("vestibulo") or []
+    if len(vest) >= 3:
+        nucleo_raw.append(vest)
+
+    nucleo_shapes = []
+    for pts in nucleo_raw:
+        try:
+            sp = Polygon([(p["x"], p["y"]) for p in pts]).buffer(0)
+            if not sp.is_empty:
+                nucleo_shapes.append(sp)
+        except Exception:
+            pass
+
+    # ── Zona reservada: rampa + núcleo (con margen de acceso) — nada se
+    # coloca encima. Antes las plazas se trazaban en grilla ciega sobre
+    # toda la losa e invadían la rampa (hallazgo: 6 plazas bajo rampa). ──
+    reserved_parts = [rampa_poly] + [sp.buffer(0.6) for sp in nucleo_shapes]
+    reserved = unary_union(reserved_parts)
+
     dptos = geometry.get("departamentos", [])
     num_dptos = len(dptos) if dptos else proyecto.num_departamentos
     total_dptos = num_dptos * proyecto.numero_pisos
@@ -3751,60 +3795,6 @@ def _generate_sotano(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
     stall_w = normativa.get("estacionamiento_ancho", 2.70)
     stall_d = 5.00
     aisle_w = 6.00
-
-    xs = [p["x"] for p in slab]
-    ys = [p["y"] for p in slab]
-    min_x, max_x = min(xs), max(xs)
-    min_y, max_y = min(ys), max(ys)
-
-    stalls = []
-    aisles = []
-    stall_num = 1
-    remaining = req_estac
-    y_cursor = min_y
-
-    while remaining > 0 and y_cursor + stall_d <= max_y:
-        x_cursor = min_x
-        row_placed = False
-        while x_cursor + stall_w <= max_x and remaining > 0:
-            stall = [
-                {"x": round(x_cursor, 3), "y": round(y_cursor, 3)},
-                {"x": round(x_cursor + stall_w, 3), "y": round(y_cursor, 3)},
-                {"x": round(x_cursor + stall_w, 3), "y": round(y_cursor + stall_d, 3)},
-                {"x": round(x_cursor, 3), "y": round(y_cursor + stall_d, 3)},
-            ]
-            stalls.append({"id": f"E-{stall_num:02d}", "poly": stall})
-            stall_num += 1; remaining -= 1; row_placed = True
-            x_cursor += stall_w
-
-        if row_placed:
-            aisle_y = y_cursor + stall_d
-            if aisle_y + aisle_w < max_y:
-                aisle = [
-                    {"x": round(min_x, 3), "y": round(aisle_y, 3)},
-                    {"x": round(max_x, 3), "y": round(aisle_y, 3)},
-                    {"x": round(max_x, 3), "y": round(aisle_y + aisle_w, 3)},
-                    {"x": round(min_x, 3), "y": round(aisle_y + aisle_w, 3)},
-                ]
-                aisles.append(aisle)
-                y_cursor = aisle_y + aisle_w
-            else:
-                break
-            if remaining > 0 and y_cursor + stall_d <= max_y:
-                x_cursor = min_x
-                while x_cursor + stall_w <= max_x and remaining > 0:
-                    stall = [
-                        {"x": round(x_cursor, 3), "y": round(y_cursor, 3)},
-                        {"x": round(x_cursor + stall_w, 3), "y": round(y_cursor, 3)},
-                        {"x": round(x_cursor + stall_w, 3), "y": round(y_cursor + stall_d, 3)},
-                        {"x": round(x_cursor, 3), "y": round(y_cursor + stall_d, 3)},
-                    ]
-                    stalls.append({"id": f"E-{stall_num:02d}", "poly": stall})
-                    stall_num += 1; remaining -= 1
-                    x_cursor += stall_w
-                y_cursor += stall_d
-        else:
-            y_cursor += 1.0
 
     dot = normativa.get("dotaciones", RNE["instalaciones"])
     agua_1d = dot.get("agua_1d", 500) / 1000
@@ -3827,42 +3817,104 @@ def _generate_sotano(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
     total_cist = dom + aci_m3
     cuarto_maq = max(15, total_cist * 0.12)
 
-    rampa = [
-        {"x": round(min_x, 3), "y": round(min_y, 3)},
-        {"x": round(min_x + 3.0, 3), "y": round(min_y, 3)},
-        {"x": round(min_x + 3.0, 3), "y": round(max_y, 3)},
-        {"x": round(min_x, 3), "y": round(max_y, 3)},
-    ]
-
+    # ── Cisternas: recinto de ancho fijo realista (antes: franja de todo
+    # el ancho de losa, ~0.3-0.7m — no construible) en la esquina opuesta
+    # a la rampa, sumado a la zona reservada ──
     cisternas = []
     if total_cist > 0:
-        cist_depth = 2.5
-        area_dom_a = (dom / 2) / cist_depth
-        area_dom_b = (dom / 2) / cist_depth
-        area_aci = aci_m3 / cist_depth
+        area_dom_a = dom / 2
+        area_dom_b = dom / 2
+        area_aci = aci_m3
         area_maq = cuarto_maq
         total_cist_area = area_dom_a + area_dom_b + area_aci + area_maq
-        cist_width = max_x - min_x
-        if cist_width > 0 and total_cist_area > 0:
-            cist_height = total_cist_area / cist_width
-            cist_top = max_y - cist_height
-            zones = [
-                {"label": f"CIST. CONS. A\n{dom/2:.1f} m3", "area": area_dom_a, "fill": "#bfdbfe", "stroke": "#2563eb"},
-                {"label": f"CIST. CONS. B\n{dom/2:.1f} m3", "area": area_dom_b, "fill": "#93c5fd", "stroke": "#1d4ed8"},
-                {"label": f"CIST. ACI\n{aci_m3:.1f} m3", "area": area_aci, "fill": "#fca5a5", "stroke": "#dc2626"},
-                {"label": f"CTO. MAQ.\n{cuarto_maq:.1f} m2", "area": area_maq, "fill": "#fef3c7", "stroke": "#d97706"},
+        cist_w = max(3.5, min(6.0, max_x - min_x - RAMPA_W - 1.0))
+        cist_h = total_cist_area / cist_w if cist_w > 0 else 0
+        cx0 = max_x - cist_w
+        cy0 = max_y - cist_h
+        zones = [
+            {"label": f"CIST. CONS. A\n{area_dom_a:.1f} m3", "area": area_dom_a, "fill": "#bfdbfe", "stroke": "#2563eb"},
+            {"label": f"CIST. CONS. B\n{area_dom_b:.1f} m3", "area": area_dom_b, "fill": "#93c5fd", "stroke": "#1d4ed8"},
+            {"label": f"CIST. ACI\n{area_aci:.1f} m3", "area": area_aci, "fill": "#fca5a5", "stroke": "#dc2626"},
+            {"label": f"CTO. MAQ.\n{area_maq:.1f} m2", "area": area_maq, "fill": "#fef3c7", "stroke": "#d97706"},
+        ]
+        cursor_y = cy0
+        for zone in zones:
+            zone_h = zone["area"] / cist_w if cist_w > 0 else 0
+            poly = [
+                {"x": round(cx0, 3), "y": round(cursor_y, 3)},
+                {"x": round(max_x, 3), "y": round(cursor_y, 3)},
+                {"x": round(max_x, 3), "y": round(cursor_y + zone_h, 3)},
+                {"x": round(cx0, 3), "y": round(cursor_y + zone_h, 3)},
             ]
-            cursor_y = cist_top
-            for zone in zones:
-                zone_h = zone["area"] / cist_width if cist_width > 0 else 1
-                poly = [
-                    {"x": round(min_x, 3), "y": round(cursor_y, 3)},
-                    {"x": round(max_x, 3), "y": round(cursor_y, 3)},
-                    {"x": round(max_x, 3), "y": round(cursor_y + zone_h, 3)},
-                    {"x": round(min_x, 3), "y": round(cursor_y + zone_h, 3)},
+            cisternas.append({"poly": poly, "label": zone["label"], "fill": zone["fill"], "stroke": zone["stroke"]})
+            cursor_y += zone_h
+        cist_shape = Polygon([(cx0, cy0), (max_x, cy0), (max_x, max_y), (cx0, max_y)])
+        reserved = unary_union([reserved, cist_shape.buffer(0.3)])
+
+    # ── Plazas: grid-scan de dos filas por pasillo (patrón original),
+    # descartando celdas que invaden rampa/núcleo/cisternas en vez de
+    # trazar ciego sobre toda la losa ──
+    def _cell_free(poly_pts):
+        try:
+            sp = Polygon([(p["x"], p["y"]) for p in poly_pts])
+            return reserved.intersection(sp).area < 0.05
+        except Exception:
+            return True
+
+    def _scan_row(y):
+        row = []
+        x_cursor = min_x
+        while x_cursor + stall_w <= max_x:
+            stall = [
+                {"x": round(x_cursor, 3), "y": round(y, 3)},
+                {"x": round(x_cursor + stall_w, 3), "y": round(y, 3)},
+                {"x": round(x_cursor + stall_w, 3), "y": round(y + stall_d, 3)},
+                {"x": round(x_cursor, 3), "y": round(y + stall_d, 3)},
+            ]
+            if _cell_free(stall):
+                row.append(stall)
+            x_cursor += stall_w
+        return row
+
+    stalls = []
+    aisles = []
+    stall_num = 1
+    remaining = req_estac
+    y_cursor = min_y
+
+    while remaining > 0 and y_cursor + stall_d <= max_y:
+        row1 = _scan_row(y_cursor)
+        for stall in row1:
+            if remaining <= 0:
+                break
+            stalls.append({"id": f"E-{stall_num:02d}", "poly": stall})
+            stall_num += 1; remaining -= 1
+
+        if row1:
+            aisle_y = y_cursor + stall_d
+            if aisle_y + aisle_w < max_y:
+                aisle = [
+                    {"x": round(min_x, 3), "y": round(aisle_y, 3)},
+                    {"x": round(max_x, 3), "y": round(aisle_y, 3)},
+                    {"x": round(max_x, 3), "y": round(aisle_y + aisle_w, 3)},
+                    {"x": round(min_x, 3), "y": round(aisle_y + aisle_w, 3)},
                 ]
-                cisternas.append({"poly": poly, "label": zone["label"], "fill": zone["fill"], "stroke": zone["stroke"]})
-                cursor_y += zone_h
+                aisles.append(aisle)
+                y_cursor = aisle_y + aisle_w
+            else:
+                break
+            if remaining > 0 and y_cursor + stall_d <= max_y:
+                row2 = _scan_row(y_cursor)
+                for stall in row2:
+                    if remaining <= 0:
+                        break
+                    stalls.append({"id": f"E-{stall_num:02d}", "poly": stall})
+                    stall_num += 1; remaining -= 1
+                y_cursor += stall_d
+        else:
+            y_cursor += 1.0
+
+    nucleo_out = [poly_to_js(sp) for sp in nucleo_shapes]
 
     return {
         "name": "S1",
@@ -3871,6 +3923,7 @@ def _generate_sotano(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
         "aisles": aisles,
         "count": len(stalls),
         "rampa": rampa,
+        "nucleo": nucleo_out,
         "cisternas": cisternas,
         "req_estac": req_estac,
         "cisterna_total_m3": round(total_cist, 1),
@@ -4172,6 +4225,7 @@ def _build_webgl_payload(
         "aisles": aisles_norm,
         "cisternas": cisternas_norm,
         "rampa": norm(sotano.get("rampa", [])),
+        "nucleo": [norm(p) for p in sotano.get("nucleo", []) if p and len(p) >= 3],
         "req_estac": sotano.get("req_estac", 0),
         "count": sotano.get("count", 0),
         "cisterna_total_m3": sotano.get("cisterna_total_m3", 0),
