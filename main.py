@@ -3589,19 +3589,55 @@ def _generate_primer_piso(proyecto: ProyectoInmobiliario, geometry: dict):
     LOBBY_W = max(2.40, min(5.00, b_w * 0.25))
     LOBBY_D = max(3.50, b_d * 0.20)
 
-    # Max u for service strip — reserve lobby space on the right
-    max_u_svc = 1.0 - uw(LOBBY_W) - uw(GAP)
+    # G5: lobby centrado en el eje real del núcleo (escalera+ascensores),
+    # no en lo que sobre tras empaquetar servicios — el acceso debe alinear
+    # puerta→lobby→vestíbulo sin importar el lote/topología.
+    esc_pts = geometry.get("escalera") or []
+    asc_pts_all = [p for a in (geometry.get("ascensores") or []) for p in a]
+    nuc_pts = list(esc_pts) + asc_pts_all
+    dx = p2["x"] - p1["x"]
+    if nuc_pts and abs(dx) > 1e-6:
+        ncx = (min(p["x"] for p in nuc_pts) + max(p["x"] for p in nuc_pts)) / 2.0
+        u_nuc = max(0.0, min(1.0, (ncx - p1["x"]) / dx))
+    else:
+        u_nuc = 0.5
+    lobby_u0 = max(0.0, min(1.0 - uw(LOBBY_W), u_nuc - uw(LOBBY_W) / 2.0))
+    lobby_u1 = min(1.0, lobby_u0 + uw(LOBBY_W))
 
+    lobby_depth = LOBBY_D
+    if esc_pts and len(esc_pts) >= 3:
+        exs = [p["x"] for p in esc_pts]
+        eys = [p["y"] for p in esc_pts]
+        lobby_x0 = p1["x"] + dx * lobby_u0
+        lobby_x1 = p1["x"] + dx * lobby_u1
+        if lobby_x1 > min(exs) and lobby_x0 < max(exs):
+            # escalera cae en el ancho del lobby → extender profundidad
+            # hasta tocarla (RNE A.010: acceso continuo hall→núcleo)
+            front_y = min(p1["y"], p2["y"])
+            lobby_depth = max(LOBBY_D, (max(eys) - front_y) + 0.30)
+    lobby = _get_cell(lote_neto, lobby_u0, lobby_u1, 0, vd(lobby_depth))
+
+    # Puerta principal (RNE A.010 art. 26): vano centrado en el eje del
+    # lobby/núcleo, ancho proporcional al lobby (nunca menor a 1.20m).
+    PUERTA_W = max(1.20, min(2.00, LOBBY_W * 0.5))
+    pu_c = (lobby_u0 + lobby_u1) / 2.0
+    pu0 = max(0.0, pu_c - uw(PUERTA_W) / 2.0)
+    pu1 = min(1.0, pu0 + uw(PUERTA_W))
+    puerta = _get_cell(lote_neto, pu0, pu1, 0, vd(0.20))
+
+    # Resto de servicios: empaquetados alrededor de la banda del lobby
+    # (salta la banda si el cursor la cruza) — deja lobby siempre en su eje.
     u = 0.0
 
     def _place(w):
         nonlocal u
-        u0 = u
-        u1 = u + uw(w)
-        if u1 > max_u_svc:
+        if u < lobby_u0 and u + uw(w) > lobby_u0:
+            u = lobby_u1 + uw(GAP)
+        u0_, u1_ = u, u + uw(w)
+        if u1_ > 1.0:
             return None, None
-        u = u1 + uw(GAP)
-        return u0, u1
+        u = u1_ + uw(GAP)
+        return u0_, u1_
 
     # 1. Rampa (full depth → sótano)
     rampa = []
@@ -3628,27 +3664,12 @@ def _generate_primer_piso(proyecto: ProyectoInmobiliario, geometry: dict):
     if u0 is not None:
         servicios = _get_cell(lote_neto, u0, u1, 0, vd(SSHH_D))
 
-    # 5. Lobby: from current u cursor (services done) to lobby_u1
-    lobby_u0 = u
-    lobby_u1 = min(1.0, lobby_u0 + uw(LOBBY_W))
-    lobby_depth = LOBBY_D
-    esc_pts = geometry.get("escalera") or []
-    if esc_pts and len(esc_pts) >= 3:
-        exs = [p["x"] for p in esc_pts]
-        eys = [p["y"] for p in esc_pts]
-        lobby_x0 = p1["x"] + (p2["x"] - p1["x"]) * lobby_u0
-        lobby_x1 = p1["x"] + (p2["x"] - p1["x"]) * lobby_u1
-        if lobby_x1 > min(exs) and lobby_x0 < max(exs):
-            # escalera cae en el ancho del lobby → extender profundidad
-            # hasta tocarla (RNE A.010: acceso continuo hall→núcleo)
-            front_y = min(p1["y"], p2["y"])
-            lobby_depth = max(LOBBY_D, (max(eys) - front_y) + 0.30)
-    lobby = _get_cell(lote_neto, lobby_u0, lobby_u1, 0, vd(lobby_depth))
-
-    # 6. Comercio: right remainder (only if > 1.5m wide)
+    # 5. Comercio: remanente a la derecha del lobby (o del último servicio
+    # si desbordó ahí), solo si da un ancho útil
+    com_u0 = max(u, lobby_u1 + uw(GAP))
     com2 = []
-    if (1.0 - lobby_u1) * b_w > 1.50:
-        com2 = _get_cell(lote_neto, lobby_u1 + uw(GAP), 1.0, 0, vd(LOBBY_D))
+    if (1.0 - com_u0) * b_w > 1.50:
+        com2 = _get_cell(lote_neto, com_u0, 1.0, 0, vd(LOBBY_D))
 
     return {
         "rampa":     rampa,
@@ -3656,6 +3677,7 @@ def _generate_primer_piso(proyecto: ProyectoInmobiliario, geometry: dict):
         "tableros":  tableros,
         "servicios": servicios,
         "lobby":     lobby,
+        "puerta":    puerta,
         "comercios": [c for c in [com2] if c],
     }
 
@@ -4297,6 +4319,7 @@ def _build_webgl_payload(
         "comercios": [norm_cell(c) for c in primer_piso.get("comercios", [])],
         "servicios": norm_cell(primer_piso.get("servicios", [])),
         "lobby":     norm_cell(primer_piso.get("lobby", [])),
+        "puerta":    norm_cell(primer_piso.get("puerta", [])),
         "rampa":     norm_cell(primer_piso.get("rampa", [])),
         "basura":    norm_cell(primer_piso.get("basura", [])),
         "tableros":  norm_cell(primer_piso.get("tableros", [])),
