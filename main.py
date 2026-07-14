@@ -1726,9 +1726,22 @@ def _generate_costillas_dos_nucleos(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds
         "escalera": g_l["escalera"],
         "escaleras": [g_l["escalera"], g_r["escalera"]],
         "ascensores": g_l["ascensores"] + g_r["ascensores"],
+        "ascensores_por_nucleo": [g_l["ascensores"], g_r["ascensores"]],
         "vestibulo": g_l["vestibulo"] or g_r["vestibulo"],
+        "vestibulos": [g_l["vestibulo"], g_r["vestibulo"]],
         "patio": g_l["patio"] or g_r["patio"],
         "patio_central": poly_to_js(patio_central) if patio_central else [],
+        # Un núcleo completo (hall+escalera+ascensores+vestíbulo+core) por
+        # torre -- consumido por primer_piso/sótano/azotea para no tratar
+        # las dos torres como si compartieran un único núcleo global.
+        "nucleos": [
+            {"hall": g_l["hall"], "escalera": g_l["escalera"],
+             "ascensores": g_l["ascensores"], "vestibulo": g_l["vestibulo"],
+             "core": g_l["core"]},
+            {"hall": g_r["hall"], "escalera": g_r["escalera"],
+             "ascensores": g_r["ascensores"], "vestibulo": g_r["vestibulo"],
+             "core": g_r["core"]},
+        ],
         "ductos": g_l["ductos"] + g_r["ductos"],
         "remanentes_zona_media": g_l["remanentes_zona_media"] + g_r["remanentes_zona_media"],
         "pozos_luz": g_l["pozos_luz"] + g_r["pozos_luz"],
@@ -2682,6 +2695,15 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
         """Adjunta evaluación E5 + avisos de variables ignoradas y retorna."""
         n["ascensor_forzado"] = ascensor_forzado
         n["variables_ignoradas"] = _variables_ignoradas(proyecto, topo_usada)
+        # Topologías de núcleo único no arman "nucleos" -- sintetizar una
+        # lista de un elemento para que primer_piso/sótano/azotea puedan
+        # iterar sobre "nucleos" sin importar si hay 1 o 2 torres.
+        if "nucleos" not in g:
+            g["nucleos"] = [{
+                "hall": g.get("hall", []), "escalera": g.get("escalera", []),
+                "ascensores": g.get("ascensores", []), "vestibulo": g.get("vestibulo", []),
+                "core": g.get("core", []),
+            }]
         try:
             g["evaluacion"] = _evaluar_diseno(g, lote, _r_lat_ev, _r_pos_ev, _nd_req, pozo_final)
         except Exception:
@@ -3899,41 +3921,53 @@ def _generate_primer_piso(proyecto: ProyectoInmobiliario, geometry: dict):
     LOBBY_W = max(2.40, min(5.00, b_w * 0.25))
     LOBBY_D = max(3.50, b_d * 0.20)
 
-    # G5: lobby centrado en el eje real del núcleo (escalera+ascensores),
-    # no en lo que sobre tras empaquetar servicios — el acceso debe alinear
-    # puerta→lobby→vestíbulo sin importar el lote/topología.
-    esc_pts = geometry.get("escalera") or []
-    asc_pts_all = [p for a in (geometry.get("ascensores") or []) for p in a]
-    nuc_pts = list(esc_pts) + asc_pts_all
+    # G5: lobby centrado en el eje real de CADA núcleo (escalera+ascensores)
+    # -- no en lo que sobre tras empaquetar servicios, y no en el promedio
+    # de todas las torres (eso deja el lobby flotando en el patio central
+    # de esquemas dos-núcleos). Un lobby+puerta por núcleo real.
+    _nucleos_pp = geometry.get("nucleos") or [{
+        "escalera": geometry.get("escalera") or [],
+        "ascensores": geometry.get("ascensores") or [],
+    }]
     dx = p2["x"] - p1["x"]
-    if nuc_pts and abs(dx) > 1e-6:
-        ncx = (min(p["x"] for p in nuc_pts) + max(p["x"] for p in nuc_pts)) / 2.0
-        u_nuc = max(0.0, min(1.0, (ncx - p1["x"]) / dx))
-    else:
-        u_nuc = 0.5
-    lobby_u0 = max(0.0, min(1.0 - uw(LOBBY_W), u_nuc - uw(LOBBY_W) / 2.0))
-    lobby_u1 = min(1.0, lobby_u0 + uw(LOBBY_W))
+    n_nuc = max(1, len(_nucleos_pp))
+    LOBBY_W_EACH = LOBBY_W if n_nuc == 1 else max(2.40, LOBBY_W / n_nuc)
+    PUERTA_W = max(1.20, min(2.00, LOBBY_W_EACH * 0.5))
 
-    lobby_depth = LOBBY_D
-    if esc_pts and len(esc_pts) >= 3:
-        exs = [p["x"] for p in esc_pts]
-        eys = [p["y"] for p in esc_pts]
-        lobby_x0 = p1["x"] + dx * lobby_u0
-        lobby_x1 = p1["x"] + dx * lobby_u1
-        if lobby_x1 > min(exs) and lobby_x0 < max(exs):
-            # escalera cae en el ancho del lobby → extender profundidad
-            # hasta tocarla (RNE A.010: acceso continuo hall→núcleo)
-            front_y = min(p1["y"], p2["y"])
-            lobby_depth = max(LOBBY_D, (max(eys) - front_y) + 0.30)
-    lobby = _get_cell(lote_neto, lobby_u0, lobby_u1, 0, vd(lobby_depth))
+    lobbies, puertas, lobby_bands = [], [], []
+    for _nuc in _nucleos_pp:
+        esc_pts = _nuc.get("escalera") or []
+        asc_pts_all = [p for a in (_nuc.get("ascensores") or []) for p in a]
+        nuc_pts = list(esc_pts) + asc_pts_all
+        if nuc_pts and abs(dx) > 1e-6:
+            ncx = (min(p["x"] for p in nuc_pts) + max(p["x"] for p in nuc_pts)) / 2.0
+            u_nuc = max(0.0, min(1.0, (ncx - p1["x"]) / dx))
+        else:
+            u_nuc = 0.5
+        u0 = max(0.0, min(1.0 - uw(LOBBY_W_EACH), u_nuc - uw(LOBBY_W_EACH) / 2.0))
+        u1 = min(1.0, u0 + uw(LOBBY_W_EACH))
 
-    # Puerta principal (RNE A.010 art. 26): vano centrado en el eje del
-    # lobby/núcleo, ancho proporcional al lobby (nunca menor a 1.20m).
-    PUERTA_W = max(1.20, min(2.00, LOBBY_W * 0.5))
-    pu_c = (lobby_u0 + lobby_u1) / 2.0
-    pu0 = max(0.0, pu_c - uw(PUERTA_W) / 2.0)
-    pu1 = min(1.0, pu0 + uw(PUERTA_W))
-    puerta = _get_cell(lote_neto, pu0, pu1, 0, vd(0.20))
+        depth = LOBBY_D
+        if esc_pts and len(esc_pts) >= 3:
+            exs = [p["x"] for p in esc_pts]
+            eys = [p["y"] for p in esc_pts]
+            x0 = p1["x"] + dx * u0
+            x1 = p1["x"] + dx * u1
+            if x1 > min(exs) and x0 < max(exs):
+                # escalera cae en el ancho del lobby → extender profundidad
+                # hasta tocarla (RNE A.010: acceso continuo hall→núcleo)
+                front_y = min(p1["y"], p2["y"])
+                depth = max(LOBBY_D, (max(eys) - front_y) + 0.30)
+        lobbies.append(_get_cell(lote_neto, u0, u1, 0, vd(depth)))
+
+        pu_c = (u0 + u1) / 2.0
+        pu0 = max(0.0, pu_c - uw(PUERTA_W) / 2.0)
+        pu1 = min(1.0, pu0 + uw(PUERTA_W))
+        puertas.append(_get_cell(lote_neto, pu0, pu1, 0, vd(0.20)))
+        lobby_bands.append((u0, u1))
+
+    lobby, puerta = lobbies[0], puertas[0]
+    lobby_u0, lobby_u1 = lobby_bands[0]
 
     # Resto de servicios: empaquetados alrededor de la banda del lobby
     # (salta la banda si el cursor la cruza) — deja lobby siempre en su eje.
@@ -3988,6 +4022,8 @@ def _generate_primer_piso(proyecto: ProyectoInmobiliario, geometry: dict):
         "servicios": servicios,
         "lobby":     lobby,
         "puerta":    puerta,
+        "lobbies":   lobbies,
+        "puertas":   puertas,
         "comercios": [c for c in [com2] if c],
     }
 
@@ -4002,18 +4038,20 @@ def _generate_azotea(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
     num_dptos_planta = len(geometry.get("departamentos") or []) or (proyecto.num_departamentos or 4)
     num_dptos_total = num_dptos_planta * (proyecto.numero_pisos or 1)
 
-    esc_pts = geometry.get("escalera") or []
-    asc_list = [a for a in geometry.get("ascensores", []) if a and len(a) >= 3]
-    num_asc = len(asc_list)
+    # Un núcleo por torre (dos-núcleos = dos torres = dos cajas de escalera +
+    # dos cuartos de máquinas propios, no un cuarto de máquinas que abarque
+    # ambas torres cruzando el patio central).
+    _nucleos_az = geometry.get("nucleos") or [{
+        "escalera": geometry.get("escalera") or [],
+        "ascensores": geometry.get("ascensores") or [],
+    }]
 
     # ── Tanque elevado: RNE IS.010 art. 2.4.2 → vol = 1/3 dotación diaria
-    # (200 L/hab, 3 hab/dpto promedio)
+    # (200 L/hab, 3 hab/dpto promedio), repartido entre los núcleos que sí
+    # tienen caja de escalera.
     vol_litros = num_dptos_total * 3 * 200 / 3
     vol_m3 = vol_litros / 1000.0
     h_tanque = 2.00
-    base_area = vol_m3 / h_tanque
-    TANK_W = max(2.00, min(4.00, math.sqrt(base_area)))
-    TANK_D = max(2.00, min(5.00, base_area / TANK_W))
 
     def _bbox(pts_lists):
         xs = [p["x"] for pts in pts_lists for p in pts]
@@ -4024,53 +4062,68 @@ def _generate_azotea(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
         return [{"x": r3(x0), "y": r3(y0)}, {"x": r3(x1), "y": r3(y0)},
                 {"x": r3(x1), "y": r3(y1)}, {"x": r3(x0), "y": r3(y1)}]
 
-    if esc_pts and len(esc_pts) >= 3:
-        # ── Caja de escalera = proyección exacta de la escalera de planta típica ──
-        caja_escalera = [dict(p) for p in esc_pts]
-        core_parts = [esc_pts] + asc_list
+    try:
+        lote_sh = Polygon(proyecto.coordenadas_lote)
+        if not lote_sh.is_valid:
+            lote_sh = lote_sh.buffer(0)
+    except Exception:
+        lote_sh = None
 
-        # ── Cuarto de máquinas: envuelve los ascensores reales (mín 3.00×3.50m,
-        # RNE A.010 art. 44). Sin ascensores → no se requiere cuarto de máquinas.
-        cuarto_maquinas = []
-        area_cm = 0.0
-        if asc_list:
-            ax0, ay0, ax1, ay1 = _bbox(asc_list)
-            CM_W = max(3.00, ax1 - ax0)
-            CM_D = max(3.50, ay1 - ay0)
-            acx, acy = (ax0 + ax1) / 2, (ay0 + ay1) / 2
-            cuarto_maquinas = _rect_cell(acx - CM_W / 2, acy - CM_D / 2,
-                                         acx + CM_W / 2, acy + CM_D / 2)
-            area_cm = CM_W * CM_D
+    _validos = [n for n in _nucleos_az if (n.get("escalera") or []) and len(n["escalera"]) >= 3]
+    if _validos:
+        n_nuc = len(_validos)
+        vol_m3_each = vol_m3 / n_nuc
+        base_area_each = vol_m3_each / h_tanque
+        TANK_W = max(2.00, min(4.00, math.sqrt(base_area_each)))
+        TANK_D = max(2.00, min(5.00, base_area_each / TANK_W))
 
-        # ── Tanque elevado: adyacente al núcleo, hacia el fondo (+y);
-        # si cae fuera del lote, se voltea hacia el frente (−y).
-        cx0, cy0, cx1, cy1 = _bbox(core_parts)
-        tcx = (cx0 + cx1) / 2
-        try:
-            lote_sh = Polygon(proyecto.coordenadas_lote)
-            if not lote_sh.is_valid:
-                lote_sh = lote_sh.buffer(0)
-        except Exception:
-            lote_sh = None
-        ty0 = cy1 + 0.30
-        tank_rect = _rect_cell(tcx - TANK_W / 2, ty0, tcx + TANK_W / 2, ty0 + TANK_D)
-        if lote_sh is not None:
-            try:
-                tank_poly = Polygon([(p["x"], p["y"]) for p in tank_rect])
-                if tank_poly.difference(lote_sh).area > 0.10 * tank_poly.area:
-                    ty1 = cy0 - 0.30
-                    tank_rect = _rect_cell(tcx - TANK_W / 2, ty1 - TANK_D,
-                                           tcx + TANK_W / 2, ty1)
-            except Exception:
-                pass
-        tanque_elevado = tank_rect
+        cajas_escalera, cuartos_maquinas, tanques_elevados = [], [], []
+        area_cm_total = 0.0
+        for _nuc in _validos:
+            esc_pts = _nuc["escalera"]
+            asc_list = [a for a in (_nuc.get("ascensores") or []) if a and len(a) >= 3]
+            caja_escalera = [dict(p) for p in esc_pts]
+            core_parts = [esc_pts] + asc_list
+
+            cuarto_maquinas = []
+            area_cm = 0.0
+            if asc_list:
+                ax0, ay0, ax1, ay1 = _bbox(asc_list)
+                CM_W = max(3.00, ax1 - ax0)
+                CM_D = max(3.50, ay1 - ay0)
+                acx, acy = (ax0 + ax1) / 2, (ay0 + ay1) / 2
+                cuarto_maquinas = _rect_cell(acx - CM_W / 2, acy - CM_D / 2,
+                                             acx + CM_W / 2, acy + CM_D / 2)
+                area_cm = CM_W * CM_D
+
+            cx0, cy0, cx1, cy1 = _bbox(core_parts)
+            tcx = (cx0 + cx1) / 2
+            ty0 = cy1 + 0.30
+            tank_rect = _rect_cell(tcx - TANK_W / 2, ty0, tcx + TANK_W / 2, ty0 + TANK_D)
+            if lote_sh is not None:
+                try:
+                    tank_poly = Polygon([(p["x"], p["y"]) for p in tank_rect])
+                    if tank_poly.difference(lote_sh).area > 0.10 * tank_poly.area:
+                        ty1 = cy0 - 0.30
+                        tank_rect = _rect_cell(tcx - TANK_W / 2, ty1 - TANK_D,
+                                               tcx + TANK_W / 2, ty1)
+                except Exception:
+                    pass
+
+            cajas_escalera.append(caja_escalera)
+            cuartos_maquinas.append(cuarto_maquinas)
+            tanques_elevados.append(tank_rect)
+            area_cm_total += area_cm
 
         return {
-            "caja_escalera":   caja_escalera,
-            "cuarto_maquinas": cuarto_maquinas,
-            "tanque_elevado":  tanque_elevado,
-            "vol_tanque_m3":   r3(vol_m3),
-            "area_cm_m2":      r3(area_cm),
+            "caja_escalera":    cajas_escalera[0],
+            "cuarto_maquinas":  cuartos_maquinas[0],
+            "tanque_elevado":   tanques_elevados[0],
+            "cajas_escalera":   cajas_escalera,
+            "cuartos_maquinas": cuartos_maquinas,
+            "tanques_elevados": tanques_elevados,
+            "vol_tanque_m3":    r3(vol_m3),
+            "area_cm_m2":       r3(area_cm_total),
         }
 
     # ── Fallback legacy (sin escalera en geometry): marco real del lote
@@ -4181,16 +4234,24 @@ def _generate_sotano(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
     # vestíbulo de la planta típica (mismo marco de coordenadas para el caso
     # de lote rectangular estándar; ver limitación conocida para lotes
     # irregulares en la nota F1) en vez de dejar el sótano sin salida ──
+    # Reserva TODOS los núcleos (dos-núcleos = dos escaleras+ascensores
+    # propios) -- reservar solo el singular "escalera"/"ascensores" dejaba
+    # el núcleo de la torre derecha sin reservar y plazas podían invadirlo.
     nucleo_raw = []
-    esc = geometry.get("escalera") or []
-    if len(esc) >= 3:
-        nucleo_raw.append(esc)
-    for a in geometry.get("ascensores", []):
-        if a and len(a) >= 3:
-            nucleo_raw.append(a)
-    vest = geometry.get("vestibulo") or []
-    if len(vest) >= 3:
-        nucleo_raw.append(vest)
+    for _nuc in (geometry.get("nucleos") or [{
+        "escalera": geometry.get("escalera") or [],
+        "ascensores": geometry.get("ascensores") or [],
+        "vestibulo": geometry.get("vestibulo") or [],
+    }]):
+        esc = _nuc.get("escalera") or []
+        if len(esc) >= 3:
+            nucleo_raw.append(esc)
+        for a in (_nuc.get("ascensores") or []):
+            if a and len(a) >= 3:
+                nucleo_raw.append(a)
+        vest = _nuc.get("vestibulo") or []
+        if len(vest) >= 3:
+            nucleo_raw.append(vest)
 
     nucleo_shapes = []
     for pts in nucleo_raw:
@@ -4673,6 +4734,9 @@ def _build_webgl_payload(
         "rampa":     norm_cell(primer_piso.get("rampa", [])),
         "basura":    norm_cell(primer_piso.get("basura", [])),
         "tableros":  norm_cell(primer_piso.get("tableros", [])),
+        # Un lobby+puerta por núcleo real (dos-núcleos = dos accesos).
+        "lobbies": [norm_cell(c) for c in primer_piso.get("lobbies", [])],
+        "puertas": [norm_cell(c) for c in primer_piso.get("puertas", [])],
     }
 
     sotano_norm = {
@@ -4736,6 +4800,9 @@ def _build_webgl_payload(
             "unidades": unidades,
             "circulacion": {
                 "hall": {"coords": hall_coords_norm},
+                # "halls": una entrada por torre (dos-núcleos); torre única
+                # -> fallback a la misma hall singular.
+                "halls": [{"coords": norm(h)} for h in geometry.get("halls", [geometry.get("hall", [])])],
                 "corridors": [{"coords": c} for c in corridor_list],
                 "pasillos": [],
             },
@@ -4747,14 +4814,38 @@ def _build_webgl_payload(
                 "ascensores": [{"coords": a} for a in asc_list],
                 "vestibulo": {"coords": vest_pts},
                 "core_envelope": {"coords": norm(geometry.get("core", []))},
+                # "nucleos": un núcleo completo (hall+escalera+ascensores+
+                # vestíbulo+core) por torre real -- consumido por el
+                # frontend para no dibujar ascensores/escaleras huérfanos
+                # cuando hay más de una torre.
+                "nucleos": [
+                    {
+                        "hall": {"coords": norm(n.get("hall", []))},
+                        "escalera": {"coords": norm(n.get("escalera", []))},
+                        "ascensores": [{"coords": norm(a)} for a in n.get("ascensores", [])],
+                        "vestibulo": {"coords": norm(n.get("vestibulo", []))},
+                        "core": {"coords": norm(n.get("core", []))},
+                    }
+                    for n in geometry.get("nucleos", [])
+                ],
             },
             "tecnico": {
-                "patios": [{
-                    "coords": patio_pts,
-                    "cumple_minimo": patio_w >= pozo_final,
-                    "dimension_minima_requerida": r3(pozo_final),
-                    "dimension_actual": r3(patio_w),
-                }] if patio_pts else [],
+                "patios": (
+                    [{
+                        "coords": patio_pts,
+                        "cumple_minimo": patio_w >= pozo_final,
+                        "dimension_minima_requerida": r3(pozo_final),
+                        "dimension_actual": r3(patio_w),
+                    }] if patio_pts else []
+                ) + (
+                    [{
+                        "coords": norm(geometry["patio_central"]),
+                        "cumple_minimo": True,
+                        "dimension_minima_requerida": r3(pozo_final),
+                        "dimension_actual": r3(PATIO_CENTRAL_GAP),
+                        "tipo": "patio_central",
+                    }] if geometry.get("patio_central") else []
+                ),
                 "ductos": [{"coords": d} for d in ductos_list],
                 "pozos_luz": [{"coords": p, "cumple": ok} for p, ok in pozos_luz_pairs],
                 "columnas": [
@@ -4771,6 +4862,10 @@ def _build_webgl_payload(
                 "tanque_elevado":  norm_cell((azotea or {}).get("tanque_elevado", [])),
                 "vol_tanque_m3":   (azotea or {}).get("vol_tanque_m3", 0),
                 "area_cm_m2":      (azotea or {}).get("area_cm_m2", 0),
+                # Una caja/cuarto/tanque por núcleo real (dos-núcleos).
+                "cajas_escalera":   [norm_cell(c) for c in (azotea or {}).get("cajas_escalera", [])],
+                "cuartos_maquinas": [norm_cell(c) for c in (azotea or {}).get("cuartos_maquinas", [])],
+                "tanques_elevados": [norm_cell(c) for c in (azotea or {}).get("tanques_elevados", [])],
             },
         },
         "anotaciones": anotaciones,
