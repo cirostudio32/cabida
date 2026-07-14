@@ -813,9 +813,10 @@ const initApp = () => {
                 }
             }
 
-            ap.area = Math.max(0, finalArea);
+            // Área/tipología ya vienen del backend (cuadro_unidades, ver ejecutarAuditoriaRNE);
+            // finalArea (turf.difference local) solo sirve para el fallback sin backend.
+            if (!ap.area) ap.area = Math.max(0, finalArea);
             let t = getTypology(ap.area);
-            ap.typology = t.name;
             ap.colorVar = `--col-${t.col}`;
             ap.hab = t.hab;
             totalVendible += ap.area;
@@ -889,8 +890,13 @@ const initApp = () => {
             }
         }
 
-        let hallArea = calculatePolyArea(corePoly);
-        if (hallArea < 5 && params.dptosPlanta > 1) hallArea = 15;
+        // Área común: usar cuadro_areas del backend (área comun real validada) si existe;
+        // el fallback local (corePoly) solo aplica sin backend (dibujo previo a generar).
+        let hallArea = rneResultado?.cuadro_areas?.area_comun_planta_m2;
+        if (hallArea == null) {
+            hallArea = calculatePolyArea(corePoly);
+            if (hallArea < 5 && params.dptosPlanta > 1) hallArea = 15;
+        }
 
         let actDuctArea = 0;
         smallDuctos.forEach(d => actDuctArea += calculatePolyArea(d));
@@ -1649,18 +1655,27 @@ const initApp = () => {
                     smallDuctos = (geo.ductos || []).filter(d => d && d.length >= 3);
 
                     if (geo.departamentos && geo.departamentos.length > 0) {
+                        // Áreas/tipología: usar SIEMPRE cuadro_unidades (motor Python) como
+                        // fuente única de verdad -- el mismo id (X01, X02...) identifica la
+                        // unidad ahí y en geo.departamentos. Evita que el cliente recalcule
+                        // el área vía turf.difference y diverja del valor validado backend.
+                        let unidadesById = {};
+                        (resultado.cuadro_unidades || []).forEach(u => { unidadesById[u.id] = u; });
+
                         apartments = geo.departamentos
                             .map((entry, i) => {
                                 let contorno = Array.isArray(entry) ? entry : (entry && entry.contorno);
                                 let zonas = (!Array.isArray(entry) && entry && Array.isArray(entry.zonas)) ? entry.zonas : [];
                                 let tipologia = (!Array.isArray(entry) && entry && entry.tipologia) ? entry.tipologia : '';
                                 if (!contorno || contorno.length < 3) return null;
+                                let id = `X${String(i + 1).padStart(2, '0')}`;
+                                let u = unidadesById[id];
                                 return {
-                                    id: `X${String(i + 1).padStart(2, '0')}`,
+                                    id,
                                     poly: contorno,
                                     zonas: zonas,
-                                    area: 0,
-                                    typology: tipologia || '3D',
+                                    area: u ? u.area_neta_m2 : 0,
+                                    typology: (u && u.tipologia) || tipologia || '3D',
                                     hab: 3
                                 };
                             })
