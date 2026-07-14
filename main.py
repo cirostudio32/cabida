@@ -1297,6 +1297,21 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
     # Filas: ancho de fachada tipológico real (1D+E 6.25 / 2D 6.9), nunca <5.2
     h_fila = max(5.2, (min_area_dpto * 1.13) / col_w)
 
+    def _block_cap(width_avail, depth_blk):
+        """Máx unidades en bloque frente/fondo: frente tipológico mínimo
+        5.2m (calibración DXF Lima) y área neta del bloque. Tope duro 2 —
+        el corredor central (stub ucl..ucr) solo da puerta a las unidades
+        que abarcan ese eje; una 3ra unidad lateral quedaría sin acceso
+        real y se descarta en _door_access (huecos silenciosos). H2 fix:
+        antes el corte binario usaba W/2 con la franja de pozo restada,
+        subestimando la mitad neta y forzando n=1 (un solo dpto >100m²)
+        en lotes de 15-20m que sí caben en 2 unidades tipológicas."""
+        if depth_blk <= 3.5 or width_avail <= 0:
+            return 1
+        by_frente = int(width_avail // 5.2)
+        by_area = int((width_avail * depth_blk) / (min_area_dpto * 1.05))
+        return max(1, min(2, by_frente, by_area))
+
     # ── Búsqueda: nº de filas por lado que mejor cumple num_dptos ──
     # Bloques frente/fondo con crujía real 8.2m; el excedente de profundidad
     # va al patio posterior (área libre), no a inflar unidades.
@@ -1312,8 +1327,8 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
                 if Dm_try > D_use - 2 * DEPTH_MIN + 1e-9:
                     continue
                 Df_try = Db_try = min(_cap, (D_use - Dm_try) / 2)
-                n_f = 2 if (W / 2.0 >= 4.2 and (W / 2.0) * Df_try >= min_area_dpto * 1.05) else 1
-                n_b = 2 if (W / 2.0 >= 4.2 and (W / 2.0) * Db_try >= min_area_dpto * 1.05) else 1
+                n_f = _block_cap(W, Df_try)
+                n_b = _block_cap(W, Db_try)
                 tot = min(num_dptos, n_f + n_b + n_m_try)
                 # max logrado; luego menor sobre-capacidad; luego núcleo más compacto
                 key = (tot, -(n_f + n_b + n_m_try), -Dm_try)
@@ -1350,15 +1365,24 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
 
     # Ajuste de unidades pedidas en bloques
     n_total = max(1, min(num_dptos, n_f_cap + n_b_cap + n_m))
+    # H2: reparto ALTERNADO frente/fondo (antes siempre llenaba n_b hasta
+    # su cap antes de tocar n_f -- con caps >2 dejaba el bloque frente
+    # entero sin partir mientras el fondo absorbía todo el remanente).
     n_f, n_b = 1, 1
     _rem = n_total - 2 - n_m
+    _turn = 0
     while _rem > 0:
-        if n_b < n_b_cap:
+        if _turn == 0 and n_f < n_f_cap:
+            n_f += 1; _rem -= 1
+        elif _turn == 1 and n_b < n_b_cap:
             n_b += 1; _rem -= 1
         elif n_f < n_f_cap:
             n_f += 1; _rem -= 1
+        elif n_b < n_b_cap:
+            n_b += 1; _rem -= 1
         else:
             break
+        _turn = 1 - _turn
 
     # E2: si borde inclinado del lote corta un bloque fondo/frente dejando dptos
     # demasiado pequeños, bajar a n_b=1 / n_f=1 (un dpto a todo ancho).
@@ -1374,21 +1398,26 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
         except Exception:
             return poly.bounds[3]
 
-    _mid_x = (ucl + ucr) / 2  # x del centro del corredor
-    _w_net = W / 2 - fz        # ancho neto de cada mitad (sin franja)
-    if n_b == 2:
-        _xl = (xa + fz + _mid_x) / 2
-        _xr = (_mid_x + xb - fz) / 2
-        _dbl = max(0.0, _y_top_at(lote_util, _xl) - yb0)
-        _dbr = max(0.0, _y_top_at(lote_util, _xr) - yb0)
-        if _dbl * _w_net < min_area_dpto * 1.05 or _dbr * _w_net < min_area_dpto * 1.05:
-            n_b = 1
-    if n_f == 2:
-        _xl = (xa + fz + _mid_x) / 2
-        _xr = (_mid_x + xb - fz) / 2
-        _dfl = max(0.0, yf0 - ya)   # frente siempre horizontal en lotes estándar
-        if _dfl * _w_net < min_area_dpto * 1.05:
-            n_f = 1
+    def _shrink_for_slope(n, y_top_of_x, y0):
+        """H2: bloque partido en n a lo ancho (xa..xb); si el borde
+        inclinado del lote deja algún segmento bajo área mínima, reduce n
+        (generaliza el viejo chequeo binario n==2 a cualquier N)."""
+        while n > 1:
+            step = (xb - xa) / n
+            ok = True
+            for i in range(n):
+                xm = xa + (i + 0.5) * step
+                d = max(0.0, y_top_of_x(xm) - y0)
+                if d * step < min_area_dpto * 1.05:
+                    ok = False
+                    break
+            if ok:
+                break
+            n -= 1
+        return n
+
+    if n_b > 1:
+        n_b = _shrink_for_slope(n_b, lambda x: _y_top_at(lote_util, x), yb0)
 
     # ── Núcleo: escalera (izq) y ascensores (der) enfrentados al corredor ──
     stair_poly = Polygon([
@@ -1429,14 +1458,22 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
     hall_clipped = safe_clip(unary_union(hall_parts), lote_util)
     hall_buf = hall_clipped.buffer(0.40) if hall_clipped and not hall_clipped.is_empty else None
 
+    def _split_block(n):
+        """H2: partición N-way del bloque frente/fondo (xa..xb). N=1 no
+        parte; N=2 mantiene el corte por el eje del corredor (compat
+        visual); N>=3 reparte uniforme por ancho tipológico."""
+        if n <= 1:
+            return [(xa, xb)]
+        if n == 2:
+            _mid = (ucl + ucr) / 2
+            return [(xa, _mid), (_mid, xb)]
+        step = (xb - xa) / n
+        return [(xa + i * step, xa + (i + 1) * step) for i in range(n)]
+
     # ── Specs de unidades ──
     units_spec = []
     # Bloque frente (puertas al arranque del corredor)
-    if n_f == 1:
-        _splits_f = [(xa, xb)]
-    else:
-        _mid = (ucl + ucr) / 2
-        _splits_f = [(xa, _mid), (_mid, xb)]
+    _splits_f = _split_block(n_f)
     for (u0, u1) in _splits_f:
         units_spec.append({
             "corners": ((u0, yf0), (u1, yf0), (u1, ya), (u0, ya)),
@@ -1464,11 +1501,7 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
             "lado": "intermedio", "fachada": False,
         })
     # Bloque fondo (puertas al remate del corredor)
-    if n_b == 1:
-        _splits_b = [(xa, xb)]
-    else:
-        _mid = (ucl + ucr) / 2
-        _splits_b = [(xa, _mid), (_mid, xb)]
+    _splits_b = _split_block(n_b)
     for (u0, u1) in _splits_b:
         units_spec.append({
             "corners": ((u0, yb0), (u1, yb0), (u1, y_end), (u0, y_end)),
