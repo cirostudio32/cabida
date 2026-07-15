@@ -1477,6 +1477,18 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
         y_end = yb0 + Db
         patio_depth = yb - y_end
 
+    # Fondo ciego (medianera) + retiro posterior 0: el patio posterior no ventila
+    # a nada (muro ciego). Un patio-sliver ahí es huella desperdiciada y se lee
+    # como "el lote no llega al fondo". Se extiende el bloque de fondo hasta la
+    # línea de propiedad (yb) absorbiendo el remanente, aunque la unidad supere
+    # el tope calibrado — llegar a la medianera es la intención explícita del
+    # usuario. Solo aplica con fondo ciego; con fachada al fondo el patio sí
+    # ventila y se conserva.
+    if bool(getattr(proyecto, "ciego_fondo", True)) and r_pos <= 1e-6 and y_end < yb - 0.05:
+        Db = yb - yb0
+        y_end = yb
+        patio_depth = 0.0
+
     # ── Núcleo: escalera (izq) y ascensores (der) enfrentados al corredor ──
     stair_poly = Polygon([
         (ucl - ESC_W, yf0), (ucl, yf0),
