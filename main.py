@@ -1244,6 +1244,7 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
     # 1D 5.2 / 1D+E 6.25 / 2D 6.9 / 2D+E 8.35, pozos al mínimo normativo.
     CORR_W = 1.80
     DEPTH_T, DEPTH_MIN, DEPTH_MAX = 8.20, 6.50, 8.60  # crujía real
+    AREA_MAX_DPTO = 130.0  # G-B: tope área unidad; excedente de bloque va a patio
     ESC_W, ESC_L = 2.50, float(RNE["circulacion_v"].get("esc_largo", 5.60))
     ASC_W = 2.00
     asc_l = RNE["ascensor"]["largo"]
@@ -1384,6 +1385,18 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
             break
         _turn = 1 - _turn
 
+    # G-B: clamp profundidad de bloque frente por área máx de unidad. Un bloque
+    # a todo ancho con n_f bajo genera un dpto gigante (ej. 23m×8.2m = 190m²);
+    # se recorta la profundidad y el excedente pasa a patio.
+    _blk_w = max(1e-6, xb - xa)
+    _df_cap = AREA_MAX_DPTO * max(1, n_f) / _blk_w
+    if Df > _df_cap:
+        Df = _df_cap
+        yf0 = ya + Df
+        yb0 = yf0 + Dm
+        y_end = yb0 + Db
+        patio_depth = yb - y_end
+
     # E2: si borde inclinado del lote corta un bloque fondo/frente dejando dptos
     # demasiado pequeños, bajar a n_b=1 / n_f=1 (un dpto a todo ancho).
     def _y_top_at(poly, x):
@@ -1419,6 +1432,14 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
     if n_b > 1:
         n_b = _shrink_for_slope(n_b, lambda x: _y_top_at(lote_util, x), yb0)
 
+    # G-B: clamp profundidad de bloque fondo por área máx (n_b ya final tras
+    # slope-shrink). Recorta y_end; el excedente hasta yb queda como patio.
+    _db_cap = AREA_MAX_DPTO * max(1, n_b) / _blk_w
+    if Db > _db_cap:
+        Db = _db_cap
+        y_end = yb0 + Db
+        patio_depth = yb - y_end
+
     # ── Núcleo: escalera (izq) y ascensores (der) enfrentados al corredor ──
     stair_poly = Polygon([
         (ucl - ESC_W, yf0), (ucl, yf0),
@@ -1438,7 +1459,12 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
             (ucr + ASC_W, a0 + asc_l), (ucr, a0 + asc_l),
         ]))
     core_items = [stair_poly] + asc_polys
-    core_clipped = safe_clip(unary_union(core_items).envelope, lote_util)
+    # G-A: el bloque núcleo se dibuja como footprint REAL (escalera ∪ ascensores),
+    # no como bounding-box (envelope). El envelope incluía la muesca entre ejes y
+    # se pintaba sobre una unidad vecina (overlap ~6.5 m²); la unidad conserva su
+    # acceso al hall porque no se recorta, solo se dibuja el núcleo más ajustado.
+    core_footprint = unary_union(core_items).buffer(0.0)
+    core_clipped = safe_clip(core_footprint, lote_util)
 
     # ── Hall: corredor central + ensanche frente a escalera Y ascensores
     # (G3 — nodo distribuidor en ambos frentes de núcleo, no solo pasillo;
@@ -2639,6 +2665,16 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
     lote = Polygon(proyecto.coordenadas_lote)
     if not lote.is_valid:
         lote = lote.buffer(0)
+
+    _r_lat0 = float(proyecto.retiro_lateral or 0.0)
+    _r_pos0 = float(proyecto.retiro_posterior or 0.0)
+    _lu0 = _erode_lote(lote, _r_lat0, _r_pos0) or lote
+    _W_util0 = round(_lu0.bounds[2] - _lu0.bounds[0], 2)
+    if _W_util0 < 15.0:
+        raise ValueError(
+            f"Lote inviable: ancho útil {_W_util0}m < 15.0m mínimo requerido. "
+            f"Aumentar frente o reducir retiros laterales."
+        )
 
     h_edif = proyecto.numero_pisos * (proyecto.altura_piso or RNE["altura_piso"])
     num_dptos = max(2, proyecto.num_departamentos)
