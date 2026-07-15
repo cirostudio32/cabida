@@ -1477,15 +1477,17 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
         y_end = yb0 + Db
         patio_depth = yb - y_end
 
-    # Fondo ciego (medianera) + retiro posterior 0: el patio posterior no ventila
-    # a nada (muro ciego). Un patio-sliver ahí es huella desperdiciada y se lee
-    # como "el lote no llega al fondo". Se extiende el bloque de fondo hasta la
-    # línea de propiedad (yb) absorbiendo el remanente, aunque la unidad supere
-    # el tope calibrado — llegar a la medianera es la intención explícita del
-    # usuario. Solo aplica con fondo ciego; con fachada al fondo el patio sí
-    # ventila y se conserva.
-    if bool(getattr(proyecto, "ciego_fondo", True)) and r_pos <= 1e-6 and y_end < yb - 0.05:
-        Db = yb - yb0
+    # Fondo ciego (medianera) + retiro posterior 0: un patio-SLIVER contra el
+    # muro ciego no ventila a nada y se lee como "el lote no llega al fondo".
+    # Se absorbe SOLO si es un sliver muerto (< DEPTH_MIN: no cabe otra fila de
+    # unidades). Un gap grande NO se vuelca en una unidad gigante — eso sería
+    # sub-construcción (deberían caber más filas), un problema distinto que no
+    # se resuelve inflando el dpto de fondo. Solo con fondo ciego + retiro 0.
+    _SLIVER_MAX = 2.0  # gap > esto NO es dead-space: es sub-construcción (otra fila)
+    _rem = yb - y_end
+    if (bool(getattr(proyecto, "ciego_fondo", True)) and r_pos <= 1e-6
+            and 0.05 < _rem <= _SLIVER_MAX):
+        Db += _rem
         y_end = yb
         patio_depth = 0.0
 
