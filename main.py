@@ -1244,7 +1244,9 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
     # 1D 5.2 / 1D+E 6.25 / 2D 6.9 / 2D+E 8.35, pozos al mínimo normativo.
     CORR_W = 1.80
     DEPTH_T, DEPTH_MIN, DEPTH_MAX = 8.20, 6.50, 8.60  # crujía real
-    AREA_MAX_DPTO = 130.0  # G-B: tope área unidad; excedente de bloque va a patio
+    AREA_MAX_DPTO = 88.0  # tope área unidad = envolvente real DXF (max 84m² +5%);
+                          # excedente de bloque va a patio. Antes 130 dejaba pasar
+                          # dptos de 111-131m² (contrastar_motor.py vs huellas_ref).
     ESC_W, ESC_L = 2.50, float(RNE["circulacion_v"].get("esc_largo", 5.60))
     ASC_W = 2.00
     asc_l = RNE["ascensor"]["largo"]
