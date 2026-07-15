@@ -654,8 +654,8 @@ def _generate_claustro(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
                        half_L, half_S, hw, num_dptos, num_asc,
                        nec_esc_prot, nec_ascensor, pozo_final, h_edif):
     """Claustro: patio central + corridors perimetrales + dptos en 4 alas."""
-    retiro_lat_geo = float(proyecto.retiro_lateral or 2.30)
-    retiro_pos_geo = float(proyecto.retiro_posterior or 2.30)
+    retiro_lat_geo = float(proyecto.retiro_lateral if proyecto.retiro_lateral is not None else 2.30)
+    retiro_pos_geo = float(proyecto.retiro_posterior if proyecto.retiro_posterior is not None else 2.30)
     retiro_lat_neg = retiro_lat_geo
     retiro_lat_pos = retiro_lat_geo
     retiro_fondo_geo = retiro_pos_geo
@@ -948,8 +948,8 @@ def _generate_tower(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
                     half_L, half_S, hw, num_dptos, num_asc,
                     nec_esc_prot, nec_ascensor, pozo_final, h_edif):
     """Tower: central core + 4 corner quadrant apartments."""
-    retiro_lat_geo = float(proyecto.retiro_lateral or 2.30)
-    retiro_pos_geo = float(proyecto.retiro_posterior or 2.30)
+    retiro_lat_geo = float(proyecto.retiro_lateral if proyecto.retiro_lateral is not None else 2.30)
+    retiro_pos_geo = float(proyecto.retiro_posterior if proyecto.retiro_posterior is not None else 2.30)
     retiro_lat_neg = retiro_lat_geo
     retiro_lat_pos = retiro_lat_geo
     retiro_fondo_geo = retiro_pos_geo
@@ -3495,6 +3495,7 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
     # ── Pasada seguridad: forzar subtract de pozos en unidades que aún los contengan ──
     # Itera por pozo individual (no union) con buffer 0.05m para cubrir floating-point boundary.
     # Umbral de overlap bajado a 0.01 m² para capturar casos de boundary exacto.
+    _units_bajo_minimo = []
     for _pz in pozos_shared:
         try:
             _pz_buf = _pz.buffer(0.05)
@@ -3514,10 +3515,17 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
                     _np = _np.buffer(0)
                     if hasattr(_np, 'geoms'):
                         _np = max(_np.geoms, key=lambda g: g.area)
-                if not _np.is_empty and _np.area >= min_poly_area * 0.35:
+                # Umbral RNE completo (no 0.35x): un dpto recortado por debajo del
+                # mínimo normativo no debe sobrevivir como aberración de área — se
+                # descarta la unidad entera en vez de emitirla achicada.
+                if not _np.is_empty and _np.area >= min_poly_area:
                     _rec['poly'] = _np
+                else:
+                    _units_bajo_minimo.append(_rec)
             except Exception:
                 pass
+    if _units_bajo_minimo:
+        strip_units_raw = [r for r in strip_units_raw if r not in _units_bajo_minimo]
 
     # ── Pasada 1: generar zonas interiores (sin validar aún) ──
     apt_pre: List[Dict[str, Any]] = []
@@ -4261,7 +4269,7 @@ def _generate_azotea(proyecto: ProyectoInmobiliario, geometry: dict, normativa: 
     p1, p2, p3, p4 = ({"x": x, "y": y} for x, y in coords)
     techada_poly = [p1, p2, p3, p4]
 
-    retiro_lat  = float(proyecto.retiro_lateral or 2.30)
+    retiro_lat  = float(proyecto.retiro_lateral if proyecto.retiro_lateral is not None else 2.30)
     frente_neto = max(1.0, math.hypot(p2["x"] - p1["x"], p2["y"] - p1["y"]))
     fondo_neto  = max(1.0, (
         math.hypot(p4["x"] - p1["x"], p4["y"] - p1["y"]) +
