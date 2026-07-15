@@ -74,6 +74,33 @@ def _perfil(i):
              if e.dxftype() == 'TEXT' and e.dxf.layer == 'MA_0.40'
              and e.dxf.text.strip().startswith('DPTO')}
 
+    # Núcleo/circulación vertical: los DXF no tienen capa dedicada, pero el label
+    # HALL marca el punto de circulación. Su posición relativa (x_rel) dice si el
+    # núcleo real es lateral (cerca de medianera) o central. Esto dicta el
+    # criterio de ubicación del núcleo en el motor (ver _generate_costillas).
+    nucleos = []
+    for e in msp:
+        if e.dxftype() in ('TEXT', 'MTEXT'):
+            t = (e.dxf.text if e.dxftype() == 'TEXT' else e.text).strip().upper()
+            if any(k in t for k in ('HALL', 'ESCAL', 'ASCEN', 'NUCLE', 'VEST')):
+                try:
+                    ins = e.dxf.insert
+                except Exception:
+                    continue
+                x_rel = round((ins[0] - lb[0]) / LW, 2)
+                nucleos.append({
+                    'label': t[:16],
+                    'x_rel': x_rel,
+                    'y_rel': round((ins[1] - lb[1]) / LH, 2),
+                    'd_medianera': round(min(x_rel, 1 - x_rel), 2),  # 0=pegado
+                })
+    # clasificación lateral vs central (umbral 0.35 desde medianera)
+    if nucleos:
+        d_min = min(n['d_medianera'] for n in nucleos)
+        nucleo_tipo = 'lateral' if d_min < 0.35 else 'central'
+    else:
+        nucleo_tipo = None
+
     return {
         'dxf': i,
         'lote': {'w': round(LW, 2), 'h': round(LH, 2), 'area': round(lote.area, 1)},
@@ -81,6 +108,8 @@ def _perfil(i):
         'pozos': pozos,
         'tipologias_area': sorted(set(areas)),
         'dptos_piso': len(dptos),
+        'nucleos': nucleos,
+        'nucleo_tipo': nucleo_tipo,
     }
 
 
