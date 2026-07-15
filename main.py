@@ -1302,18 +1302,26 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
 
     def _block_cap(width_avail, depth_blk):
         """Máx unidades en bloque frente/fondo: frente tipológico mínimo
-        5.2m (calibración DXF Lima) y área neta del bloque. Tope duro 2 —
-        el corredor central (stub ucl..ucr) solo da puerta a las unidades
-        que abarcan ese eje; una 3ra unidad lateral quedaría sin acceso
-        real y se descarta en _door_access (huecos silenciosos). H2 fix:
-        antes el corte binario usaba W/2 con la franja de pozo restada,
-        subestimando la mitad neta y forzando n=1 (un solo dpto >100m²)
-        en lotes de 15-20m que sí caben en 2 unidades tipológicas."""
+        5.2m (calibración DXF Lima) y área neta del bloque. Tope 3 —
+        con n>=3 se emite banda distribuidora transversal pegada al
+        corredor que da puerta a las unidades laterales (antes tope duro
+        2: sin banda, la 3ra unidad no tocaba el stub ucl..ucr y caía en
+        _door_access como hueco silencioso). H2 fix: antes el corte
+        binario usaba W/2 con la franja de pozo restada, subestimando la
+        mitad neta y forzando n=1 (un solo dpto >100m²) en lotes de
+        15-20m que sí caben en 2 unidades tipológicas."""
         if depth_blk <= 3.5 or width_avail <= 0:
             return 1
         by_frente = int(width_avail // 5.2)
         by_area = int((width_avail * depth_blk) / (min_area_dpto * 1.05))
-        return max(1, min(2, by_frente, by_area))
+        n = max(1, min(3, by_frente, by_area))
+        # n=3 exige banda distribuidora (1.20m carvada del bloque): re-chequear
+        # área con la profundidad neta o las unidades caen bajo el mínimo RNE.
+        if n >= 3:
+            by_area_band = int((width_avail * (depth_blk - 1.20))
+                               / (min_area_dpto * 1.05))
+            n = max(2, min(n, by_area_band))
+        return n
 
     # ── Búsqueda: nº de filas por lado que mejor cumple num_dptos ──
     # Bloques frente/fondo con crujía real 8.2m; el excedente de profundidad
@@ -1332,9 +1340,36 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
                 Df_try = Db_try = min(_cap, (D_use - Dm_try) / 2)
                 n_f = _block_cap(W, Df_try)
                 n_b = _block_cap(W, Db_try)
-                tot = min(num_dptos, n_f + n_b + n_m_try)
-                # max logrado; luego menor sobre-capacidad; luego núcleo más compacto
-                key = (tot, -(n_f + n_b + n_m_try), -Dm_try)
+                # Filas efectivas TRAS el estiramiento A4 (el lado que no fija
+                # Dm hereda más filas de tamaño h_fila) — sin modelarlo la
+                # búsqueda subestima tot de configs row-heavy y elige banda
+                # distribuidora donde las filas ya alcanzaban num_dptos.
+                _t_l = nuc_l_h + fl * h_fila
+                _t_r = nuc_r_h + fr * h_fila
+                _dm_full = max(_t_l, _t_r, ESC_L) + 0.20
+                _fl2, _fr2 = fl, fr
+                if _fl2 > 0 and _t_l < _t_r - 1e-6:
+                    _fl2 = max(_fl2, int(_dm_full // h_fila))
+                if _fr2 > 0 and _t_r < _t_l - 1e-6:
+                    _fr2 = max(_fr2, int(_dm_full // h_fila))
+                _nm_eff = _fl2 + _fr2
+                tot = min(num_dptos, n_f + n_b + _nm_eff)
+                # max logrado; luego SIN banda distribuidora (n>=3 solo si sube
+                # tot — la banda cuesta circulación y frente en bordes
+                # inclinados); luego menor sobre-capacidad; luego núcleo
+                # compacto. La banda depende del reparto REAL alternado (no de
+                # los caps n_f/n_b, que valen 3 siempre que el ancho da).
+                _blk = max(2, tot - _nm_eff)
+                _nf_act = min(n_f, (_blk + 1) // 2)
+                _nb_act = min(n_b, _blk - _nf_act)
+                _band_pen = int(_nf_act >= 3) + int(_nb_act >= 3)
+                # 4º término: preferir configs cuyo tot no dependa del
+                # estiramiento A4 (_nm_eff > n_m_try) — el estiramiento parte
+                # Dm en filas más delgadas y el núcleo recorta la primera
+                # bajo el mínimo (p.ej. fila de 38m² donde cabía una de 50).
+                key = (tot, -_band_pen,
+                       -(_nf_act + _nb_act + _nm_eff),
+                       -(_nm_eff - n_m_try), -Dm_try)
                 if best is None or key > best[0]:
                     best = (key, fl, fr, Df_try, Db_try, n_f, n_b)
         if best is not None and best[0][0] >= num_dptos:
@@ -1482,6 +1517,22 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
         hall_parts.append(Polygon([
             (ucr, yf0), (ucr + 0.70, yf0),
             (ucr + 0.70, yf0 + _ens_r), (ucr, yf0 + _ens_r),
+        ]))
+    # Banda distribuidora transversal cuando el bloque frente/fondo parte
+    # en n>=3: la unidad lateral no toca el stub del corredor (ucl..ucr) y
+    # necesita pasillo de puerta. Se carva del propio bloque (1.20m, ancho
+    # de escape RNE A.010) y toca el corredor en yf0/yb0 — con n<=2 no se
+    # emite y el layout queda idéntico al anterior.
+    BAND_W = 1.20
+    if n_f >= 3:
+        hall_parts.append(Polygon([
+            (xa + fz, yf0 - BAND_W), (xb - fz, yf0 - BAND_W),
+            (xb - fz, yf0), (xa + fz, yf0),
+        ]))
+    if n_b >= 3:
+        hall_parts.append(Polygon([
+            (xa + fz, yb0), (xb - fz, yb0),
+            (xb - fz, yb0 + BAND_W), (xa + fz, yb0 + BAND_W),
         ]))
     hall_clipped = safe_clip(unary_union(hall_parts), lote_util)
     hall_buf = hall_clipped.buffer(0.40) if hall_clipped and not hall_clipped.is_empty else None
