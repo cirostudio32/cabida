@@ -1284,9 +1284,15 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
             col_w = _col_alt
             fz = fz_req
     elif fz > fz_req:
-        # pozo no más grande que lo normativo: devolver ancho a las columnas
+        # pozo no más grande que lo normativo: el excedente vuelve a las
+        # columnas hasta su tope de crujía (DEPTH_MAX). Con retiro_lateral=0
+        # + muros ciegos, col_w topa antes de absorber todo el excedente —
+        # antes ese resto se re-inflaba ENTERO en fz (pozo de 6.5m+ sin
+        # razón normativa, D-ducto-gigante). Ahora el resto queda como
+        # margen muerto contra la medianera (no se construye, no se
+        # ventila con él) — el pozo nunca supera lo normativo.
         col_w = min(DEPTH_MAX, col_w + (fz - fz_req))
-        fz = (W - CORR_W - 2 * col_w) / 2
+        fz = fz_req
     franja_conf = (fz + 1e-6) >= POZO_REQ
     if col_w < 4.0:
         return None, None
