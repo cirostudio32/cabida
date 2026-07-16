@@ -1615,17 +1615,72 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
     pozos_union = unary_union(pozos_final).buffer(0.0) if pozos_final else None
     core_union = unary_union(core_items).buffer(0.0)
 
-    def _split_block(n):
-        """H2: partición N-way del bloque frente/fondo (xa..xb). N=1 no
-        parte; N=2 mantiene el corte por el eje del corredor (compat
-        visual); N>=3 reparte uniforme por ancho tipológico."""
+    def _split_block(n, y_lo, y_hi):
+        """F2: partición N-way del bloque frente/fondo (xa..xb) por AREA
+        clipada igual (bisección), no por X uniforme — un corte uniforme en
+        X sobre un borde de lote inclinado deja áreas desiguales tras el
+        clip (68/84/97 en vez de ~83/83/83). N=1 no parte.
+
+        Límite conocido: n_cap (cuántas filas caben) lo decide una búsqueda
+        externa que asume reparto uniforme-X y no conoce este split
+        equi-área; en lotes muy asimétricos (lados derecha/izquierda muy
+        distintos + retiro_posterior=0) puede subestimar cuántas filas
+        caben sanas, dejando hueco sin construir (visto en test sintético
+        T_asim_pos0, caso extremo). Requiere revisar la búsqueda de n_cap
+        (F3/plan), fuera de alcance de F2."""
         if n <= 1:
             return [(xa, xb)]
-        if n == 2:
-            _mid = (ucl + ucr) / 2
-            return [(xa, _mid), (_mid, xb)]
-        step = (xb - xa) / n
-        return [(xa + i * step, xa + (i + 1) * step) for i in range(n)]
+
+        def _clip_area(x0, x1):
+            p = safe_clip(Polygon(((x0, y_hi), (x1, y_hi), (x1, y_lo), (x0, y_lo))), lote_util)
+            if p is None or p.is_empty:
+                return 0.0
+            # Restar pozo/núcleo/hall aquí también (no solo en _build_piece):
+            # si se ignoran, un split "equi-área bruta" puede quedar muy
+            # desbalanceado en área NETA cuando las exclusiones caen más de
+            # un lado (lotes asimétricos) — gatilla fusión espuria.
+            for sub in (pozos_union, core_union):
+                if sub is not None and p.intersects(sub):
+                    d_ = p.difference(sub)
+                    if hasattr(d_, "geoms"):
+                        d_ = max(d_.geoms, key=lambda g: g.area) if d_.geoms else d_
+                    p = d_
+            if hall_clipped is not None and p.intersects(hall_clipped):
+                d_ = p.difference(hall_clipped.buffer(0.0))
+                if hasattr(d_, "geoms"):
+                    d_ = max(d_.geoms, key=lambda g: g.area) if d_.geoms else d_
+                p = d_
+            return p.area if p and not p.is_empty else 0.0
+
+        total = _clip_area(xa, xb)
+        if total <= 0:
+            step = (xb - xa) / n
+            return [(xa + i * step, xa + (i + 1) * step) for i in range(n)]
+        cuts = [xa]
+        for i in range(1, n):
+            target = total * i / n
+            lo, hi = xa, xb
+            for _ in range(30):
+                mid = (lo + hi) / 2
+                if _clip_area(xa, mid) < target:
+                    lo = mid
+                else:
+                    hi = mid
+            cuts.append((lo + hi) / 2)
+        cuts.append(xb)
+        min_side = 5.2  # frente tipológico mínimo (F2 §2)
+        for i in range(1, len(cuts)):
+            if cuts[i] - cuts[i - 1] < min_side:
+                cuts[i] = cuts[i - 1] + min_side
+        for i in range(len(cuts) - 2, 0, -1):
+            if cuts[i + 1] - cuts[i] < min_side:
+                cuts[i] = cuts[i + 1] - min_side
+        if (xb - xa) < n * min_side or any(
+            cuts[i + 1] - cuts[i] < min_side - 1e-6 for i in range(n)
+        ):
+            step = (xb - xa) / n
+            return [(xa + i * step, xa + (i + 1) * step) for i in range(n)]
+        return [(cuts[i], cuts[i + 1]) for i in range(n)]
 
     def _build_piece(u0, u1, y_lo, y_hi):
         """Clip + resta pozo/núcleo/hall de una pieza rectangular. Devuelve
@@ -1657,7 +1712,7 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
         while n >= 1:
             pieces = []
             ok = True
-            for (u0, u1) in _split_block(n):
+            for (u0, u1) in _split_block(n, y_lo, y_hi):
                 ap, area_m = _build_piece(u0, u1, y_lo, y_hi)
                 if ap is None or area_m < min_area_dpto:
                     ok = False
