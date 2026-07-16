@@ -1323,6 +1323,24 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
             n = max(2, min(n, by_area_band))
         return n
 
+    # Fondo ciego + retiro posterior 0: el fondo debe LLEGAR a la línea de
+    # propiedad (rework n_b). Se sesga la búsqueda a fondo-heavy SOLO cuando
+    # llenar el fondo con el reparto base excedería AREA_MAX/unidad — así el
+    # bloque de fondo se parte en más unidades sanas en vez de 1-2 gigantes.
+    _fill_fondo = bool(getattr(proyecto, "ciego_fondo", True)) and r_pos <= 1e-6
+    from shapely.geometry import box as _box
+
+    def _fondo_fill_ok(Df_try, Dm_try, n_b_units):
+        """¿El bloque fondo, llenado hasta la línea real (clip al lote), da
+        unidades ≤ AREA_MAX con n_b_units? Área REAL clipada (no W×D), para
+        que en lote trapezoidal la cuña recortada no sobreestime."""
+        if not _fill_fondo or n_b_units < 1:
+            return False
+        _yb0 = ya + Df_try + Dm_try
+        _fill = safe_clip(_box(xa, _yb0, xb, yb), lote_util)
+        _a = _fill.area if _fill is not None and not _fill.is_empty else 0.0
+        return (_a / n_b_units) <= AREA_MAX_DPTO
+
     # ── Búsqueda: nº de filas por lado que mejor cumple num_dptos ──
     # Bloques frente/fondo con crujía real 8.2m; el excedente de profundidad
     # va al patio posterior (área libre), no a inflar unidades.
@@ -1360,14 +1378,25 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
                 # compacto. La banda depende del reparto REAL alternado (no de
                 # los caps n_f/n_b, que valen 3 siempre que el ancho da).
                 _blk = max(2, tot - _nm_eff)
-                _nf_act = min(n_f, (_blk + 1) // 2)
-                _nb_act = min(n_b, _blk - _nf_act)
+                # Bajo _fill_fondo el reparto arranca por FONDO (llega a la
+                # línea): el fondo toma la mitad grande del bloque.
+                if _fill_fondo:
+                    _nb_act = min(n_b, (_blk + 1) // 2)
+                    _nf_act = min(n_f, _blk - _nb_act)
+                else:
+                    _nf_act = min(n_f, (_blk + 1) // 2)
+                    _nb_act = min(n_b, _blk - _nf_act)
                 _band_pen = int(_nf_act >= 3) + int(_nb_act >= 3)
+                # 2º término (solo _fill_fondo): preferir configs donde el fondo
+                # llenado a la línea da unidades sanas (≤ AREA_MAX). Domina la
+                # aversión a banda: vale la banda con tal de no dejar el fondo
+                # gigante ni un gap muerto contra el muro ciego.
+                _fondo_ok = 1 if _fondo_fill_ok(Df_try, Dm_try, _nb_act) else 0
                 # 4º término: preferir configs cuyo tot no dependa del
                 # estiramiento A4 (_nm_eff > n_m_try) — el estiramiento parte
                 # Dm en filas más delgadas y el núcleo recorta la primera
                 # bajo el mínimo (p.ej. fila de 38m² donde cabía una de 50).
-                key = (tot, -_band_pen,
+                key = (tot, _fondo_ok, -_band_pen,
                        -(_nf_act + _nb_act + _nm_eff),
                        -(_nm_eff - n_m_try), -Dm_try)
                 if best is None or key > best[0]:
@@ -1408,7 +1437,9 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
     # entero sin partir mientras el fondo absorbía todo el remanente).
     n_f, n_b = 1, 1
     _rem = n_total - 2 - n_m
-    _turn = 0
+    # _fill_fondo: arrancar por FONDO para que el bloque que llega a la línea
+    # de propiedad reciba las unidades extra (no el frente).
+    _turn = 1 if _fill_fondo else 0
     while _rem > 0:
         if _turn == 0 and n_f < n_f_cap:
             n_f += 1; _rem -= 1
@@ -1479,17 +1510,30 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
 
     # Fondo ciego (medianera) + retiro posterior 0: un patio-SLIVER contra el
     # muro ciego no ventila a nada y se lee como "el lote no llega al fondo".
-    # Se absorbe SOLO si es un sliver muerto (< DEPTH_MIN: no cabe otra fila de
-    # unidades). Un gap grande NO se vuelca en una unidad gigante — eso sería
-    # sub-construcción (deberían caber más filas), un problema distinto que no
-    # se resuelve inflando el dpto de fondo. Solo con fondo ciego + retiro 0.
-    _SLIVER_MAX = 2.0  # gap > esto NO es dead-space: es sub-construcción (otra fila)
-    _rem = yb - y_end
-    if (bool(getattr(proyecto, "ciego_fondo", True)) and r_pos <= 1e-6
-            and 0.05 < _rem <= _SLIVER_MAX):
-        Db += _rem
-        y_end = yb
-        patio_depth = 0.0
+    # Se absorbe SOLO si es un sliver muerto (remanente ≤ _SLIVER_MAX): un gap
+    # mayor NO se vuelca en una unidad gigante — sería sub-construcción o, en
+    # lote trapezoidal, un dpto de 130m²+ que rompe la calibración (≤88). Para
+    # LLEGAR a un fondo profundo con unidades sanas hace falta más filas (n_b),
+    # no inflar las existentes → eso es el rework estructural, no este relleno.
+    if _fill_fondo and y_end < yb - 0.05:
+        # Rework n_b: el bloque de fondo LLEGA a la línea de propiedad. Se
+        # extiende hasta yb (back-edge plano) y safe_clip lo recorta al borde
+        # REAL del lote → trapezoidal en lote inclinado. Solo si las n_b
+        # unidades resultantes quedan sanas (≤ AREA_MAX): si no, el fondo es
+        # demasiado profundo para este nº de filas y llenarlo daría monstruos
+        # (p.ej. lote recto profundo, o pocas filas) → se deja como patio y el
+        # excedente queda sin construir (mejor gap que dpto de 130m²+).
+        _fill = safe_clip(_box(xa, yb0, xb, yb), lote_util)
+        _fa = _fill.area if _fill is not None and not _fill.is_empty else 0.0
+        if _fa / max(1, n_b) <= AREA_MAX_DPTO * 1.12:
+            y_end = yb
+            patio_depth = 0.0
+        else:
+            # No cabe sano: absorber solo un sliver muerto (≤2.0m), como antes.
+            _rem = yb - y_end
+            if 0.05 < _rem <= 2.0:
+                y_end = yb
+                patio_depth = 0.0
 
     # ── Núcleo: escalera (izq) y ascensores (der) enfrentados al corredor ──
     stair_poly = Polygon([
