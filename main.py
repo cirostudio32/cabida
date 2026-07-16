@@ -1240,9 +1240,11 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
                         num_dptos, num_asc, nec_esc_prot, nec_ascensor,
                         pozo_final, h_edif):
     # Calibrado contra DXF reales (referencias/1-6.dxf):
-    # crujía de dpto 7.7-8.2m constante, corredor 1.80m, anchos tipológicos
-    # 1D 5.2 / 1D+E 6.25 / 2D 6.9 / 2D+E 8.35, pozos al mínimo normativo.
-    CORR_W = 1.80
+    # crujía de dpto 7.7-8.2m constante, corredor 1.80m (o 1.50m si sirve
+    # pocas unidades, F4), anchos tipológicos 1D 5.2 / 1D+E 6.25 / 2D 6.9 /
+    # 2D+E 8.35, pozos al mínimo normativo.
+    CORR_W_WIDE, CORR_W_NARROW = 1.80, 1.50  # RNE A.010 escape >=1.20 + holgura
+    CORR_W = CORR_W_WIDE  # pasada inicial; F4 la angosta más abajo si aplica
     DEPTH_T, DEPTH_MIN, DEPTH_MAX = 8.20, 6.50, 8.60  # crujía real
     AREA_MAX_DPTO = 88.0  # tope área unidad = envolvente real DXF (max 84m² +5%);
                           # excedente de bloque va a patio. Antes 130 dejaba pasar
@@ -1275,24 +1277,33 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
 
     # Columnas de dptos con crujía real (≤8.2m); el pozo toma SOLO lo
     # requerido por norma — el excedente de ancho vuelve a las columnas.
-    col_w = min(DEPTH_T, (W - CORR_W - 2 * 2.20) / 2)
-    fz = (W - CORR_W - 2 * col_w) / 2
-    if fz < fz_req:
-        # intentar conformidad H/4 reduciendo crujía hasta el mínimo real
-        _col_alt = (W - CORR_W - 2 * fz_req) / 2
-        if _col_alt >= DEPTH_MIN:
-            col_w = _col_alt
-            fz = fz_req
-    elif fz > fz_req:
-        # pozo no más grande que lo normativo: el excedente vuelve a las
-        # columnas hasta su tope de crujía (DEPTH_MAX). Con retiro_lateral=0
-        # + muros ciegos, col_w topa antes de absorber todo el excedente —
-        # antes ese resto se re-inflaba ENTERO en fz (pozo de 6.5m+ sin
-        # razón normativa, D-ducto-gigante). Ahora el resto queda como
-        # margen muerto contra la medianera (no se construye, no se
-        # ventila con él) — el pozo nunca supera lo normativo.
-        col_w = min(DEPTH_MAX, col_w + (fz - fz_req))
-        fz = fz_req
+    def _calc_franjas(corr_w):
+        """col_w/fz para un ancho de corredor dado. Factorizado (F4) para
+        poder recalcular tras angostar CORR_W tras conocer nº de filas
+        servidas, sin repetir la búsqueda de filas_l/filas_r (no depende
+        de CORR_W, ver más abajo)."""
+        _col_w = min(DEPTH_T, (W - corr_w - 2 * 2.20) / 2)
+        _fz = (W - corr_w - 2 * _col_w) / 2
+        if _fz < fz_req:
+            # intentar conformidad H/4 reduciendo crujía hasta el mínimo real
+            _col_alt = (W - corr_w - 2 * fz_req) / 2
+            if _col_alt >= DEPTH_MIN:
+                _col_w = _col_alt
+                _fz = fz_req
+        elif _fz > fz_req:
+            # pozo no más grande que lo normativo: el excedente vuelve a las
+            # columnas hasta su tope de crujía (DEPTH_MAX). Con
+            # retiro_lateral=0 + muros ciegos, col_w topa antes de absorber
+            # todo el excedente — antes ese resto se re-inflaba ENTERO en fz
+            # (pozo de 6.5m+ sin razón normativa, D-ducto-gigante). Ahora el
+            # resto queda como margen muerto contra la medianera (no se
+            # construye, no se ventila con él) — el pozo nunca supera lo
+            # normativo.
+            _col_w = min(DEPTH_MAX, _col_w + (_fz - fz_req))
+            _fz = fz_req
+        return _col_w, _fz
+
+    col_w, fz = _calc_franjas(CORR_W)
     franja_conf = (fz + 1e-6) >= POZO_REQ
     if col_w < 4.0:
         return None, None
@@ -1543,6 +1554,21 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
             if 0.05 < _rem <= 2.0:
                 y_end = yb
                 patio_depth = 0.0
+
+    # F4: corredor angosto (1.50m, RNE A.010 escape >=1.20 + holgura) si
+    # sirve pocas unidades — con n_f==2 o n_b==2 el bloque extremo tiene DOS
+    # puertas (1m c/u, no graficadas) muy cerca del remate del corredor; se
+    # mantiene el ancho amplio (1.80m) ahí para no apretar esa zona. filas_l/
+    # filas_r (n_m) NO dependen de CORR_W (la búsqueda de arriba no lo usa),
+    # así que angostar aquí no invalida nada ya elegido.
+    if n_m <= 4 and n_f != 2 and n_b != 2 and CORR_W != CORR_W_NARROW:
+        CORR_W = CORR_W_NARROW
+        col_w, fz = _calc_franjas(CORR_W)
+        franja_conf = (fz + 1e-6) >= POZO_REQ
+        if col_w < 4.0:
+            return None, None
+        ucl = xa + fz + col_w
+        ucr = ucl + CORR_W
 
     # ── F3: núcleo único compacto — escalera y ascensores apilados en la
     # MISMA columna (ucl), un solo paquete (criterio DXF, ver nuc_l_h arriba) ──
