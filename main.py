@@ -1293,9 +1293,12 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
     ucl = xa + fz + col_w        # borde izquierdo del corredor
     ucr = ucl + CORR_W           # borde derecho del corredor
 
-    # Alturas del núcleo en cada columna (al arranque de la zona costillas)
-    nuc_l_h = ESC_L + (1.0 if nec_esc_prot else 0.0) * 0.0  # vestíbulo embebido
-    nuc_r_h = (num_asc * (asc_l + 0.20)) if num_asc > 0 else 0.0
+    # F3: núcleo único compacto — escalera+ascensores apilados en la MISMA
+    # columna (ucl), no repartidos en ambas medianeras (criterio DXF:
+    # huellas_ref muestra un solo paquete de núcleo por planta, nunca
+    # partido). La columna derecha (ucr) queda libre de altura de núcleo.
+    nuc_l_h = ESC_L + (num_asc * (asc_l + 0.20) if num_asc > 0 else 0.0)
+    nuc_r_h = 0.0
 
     # Filas: ancho de fachada tipológico real (1D+E 6.25 / 2D 6.9), nunca <5.2
     h_fila = max(5.2, (min_area_dpto * 1.13) / col_w)
@@ -1535,7 +1538,8 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
                 y_end = yb
                 patio_depth = 0.0
 
-    # ── Núcleo: escalera (izq) y ascensores (der) enfrentados al corredor ──
+    # ── F3: núcleo único compacto — escalera y ascensores apilados en la
+    # MISMA columna (ucl), un solo paquete (criterio DXF, ver nuc_l_h arriba) ──
     stair_poly = Polygon([
         (ucl - ESC_W, yf0), (ucl, yf0),
         (ucl, yf0 + ESC_L), (ucl - ESC_W, yf0 + ESC_L),
@@ -1548,10 +1552,10 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
         ])
     asc_polys = []
     for i in range(num_asc):
-        a0 = yf0 + i * (asc_l + 0.20)
+        a0 = yf0 + ESC_L + 0.20 + i * (asc_l + 0.20)
         asc_polys.append(Polygon([
-            (ucr, a0), (ucr + ASC_W, a0),
-            (ucr + ASC_W, a0 + asc_l), (ucr, a0 + asc_l),
+            (ucl - ASC_W, a0), (ucl, a0),
+            (ucl, a0 + asc_l), (ucl - ASC_W, a0 + asc_l),
         ]))
     core_items = [stair_poly] + asc_polys
     # G-A: el bloque núcleo se dibuja como footprint REAL (escalera ∪ ascensores),
@@ -1570,7 +1574,10 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
         (ucl - 0.70, yf0), (ucl, yf0),
         (ucl, yf0 + _ens_l), (ucl - 0.70, yf0 + _ens_l),
     ]))
-    if num_asc > 0:
+    if nuc_r_h > 0:
+        # F3: con núcleo único en ucl, nuc_r_h queda en 0 — ensanche derecho
+        # ya no aplica (nada del núcleo ocupa esa columna). Se conserva la
+        # rama por si un futuro modo "central" reintroduce altura en ucr.
         _ens_r = min(nuc_r_h + 0.8, Dm)
         hall_parts.append(Polygon([
             (ucr, yf0), (ucr + 0.70, yf0),
