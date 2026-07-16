@@ -1595,6 +1595,26 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
     hall_clipped = safe_clip(unary_union(hall_parts), lote_util)
     hall_buf = hall_clipped.buffer(0.40) if hall_clipped and not hall_clipped.is_empty else None
 
+    # ── Franjas de pozo en medianeras: acotadas SOLO a las filas intermedias
+    # que ventilan (zona media ± solape) — nunca invaden bloques frente/fondo,
+    # que ventilan a calle/patio y no requieren pozo lateral (G1, RNE A.010:
+    # el pozo se dimensiona frente a los ambientes que sirve, no de punta a punta) ──
+    # Movido ANTES de emitir frente/fondo (F1): _emit_side_block necesita
+    # pozos_union/core_union para medir el área NETA real de cada unidad
+    # (post-resta) y decidir si fusionar, no solo el rectángulo bruto.
+    pozos_final, cumple_final = [], []
+    franja_izq = Polygon([(xa, yf0 - _solape), (xa + fz, yf0 - _solape),
+                          (xa + fz, yb0 + _solape), (xa, yb0 + _solape)])
+    franja_der = Polygon([(xb - fz, yf0 - _solape), (xb, yf0 - _solape),
+                          (xb, yb0 + _solape), (xb - fz, yb0 + _solape)])
+    for fp_raw in (franja_izq, franja_der):
+        fp = safe_clip(fp_raw, lote_util)
+        if fp is not None and not fp.is_empty and fp.area > 0.5:
+            pozos_final.append(fp)
+            cumple_final.append(franja_conf)
+    pozos_union = unary_union(pozos_final).buffer(0.0) if pozos_final else None
+    core_union = unary_union(core_items).buffer(0.0)
+
     def _split_block(n):
         """H2: partición N-way del bloque frente/fondo (xa..xb). N=1 no
         parte; N=2 mantiene el corte por el eje del corredor (compat
@@ -1607,15 +1627,57 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
         step = (xb - xa) / n
         return [(xa + i * step, xa + (i + 1) * step) for i in range(n)]
 
+    def _build_piece(u0, u1, y_lo, y_hi):
+        """Clip + resta pozo/núcleo/hall de una pieza rectangular. Devuelve
+        (poly_neta_ok, area_neta) o (None, 0.0) si queda vacía."""
+        ap = safe_clip(Polygon(((u0, y_hi), (u1, y_hi), (u1, y_lo), (u0, y_lo))), lote_util)
+        if ap is None or ap.is_empty:
+            return None, 0.0
+        for sub in (pozos_union, core_union):
+            if sub is not None and ap.intersects(sub):
+                d_ = ap.difference(sub)
+                if hasattr(d_, "geoms"):
+                    d_ = max(d_.geoms, key=lambda g: g.area)
+                ap = d_
+        if hall_clipped is not None:
+            ap = ap.difference(hall_clipped.buffer(0.0))
+            if hasattr(ap, "geoms"):
+                ap = max(ap.geoms, key=lambda g: g.area)
+        if ap.is_empty:
+            return None, 0.0
+        return ap, area_neta_muros(ap)
+
+    def _emit_side_block(n_cap, y_lo, y_hi, lado, fachada_val):
+        """F1: emite bloque frente/fondo con FUSIÓN anti-aberración. Si al
+        partir en n_cap alguna pieza queda con área NETA (post pozo/núcleo/
+        hall) bajo el mínimo RNE A.020 (40m²), se reintenta con n-1 hasta
+        n=1 — nunca se publica una unidad de 35-44m². El área se mide
+        clipada+restada real, no el rectángulo bruto (D1/D2 del plan)."""
+        n = max(1, n_cap)
+        while n >= 1:
+            pieces = []
+            ok = True
+            for (u0, u1) in _split_block(n):
+                ap, area_m = _build_piece(u0, u1, y_lo, y_hi)
+                if ap is None or area_m < min_area_dpto:
+                    ok = False
+                    break
+                pieces.append((u0, u1, ap))
+            if ok:
+                return [{"corners": ((u0, y_hi), (u1, y_hi), (u1, y_lo), (u0, y_lo)),
+                         "prebuilt": ap, "lado": lado, "fachada": fachada_val}
+                        for (u0, u1, ap) in pieces]
+            n -= 1
+        # n=1 no alcanzó el mínimo neto (lote real muy angosto/corto en este
+        # bloque): se descarta el bloque entero antes que publicar basura —
+        # el conteo real de unidades queda por debajo de num_dptos pedido,
+        # reportado aguas abajo vía departamentos_emitidos/nd_delta.
+        return []
+
     # ── Specs de unidades ──
     units_spec = []
-    # Bloque frente (puertas al arranque del corredor)
-    _splits_f = _split_block(n_f)
-    for (u0, u1) in _splits_f:
-        units_spec.append({
-            "corners": ((u0, yf0), (u1, yf0), (u1, ya), (u0, ya)),
-            "lado": "frente", "fachada": bool(proyecto.frente_exterior),
-        })
+    # Bloque frente (puertas al arranque del corredor) — con fusión F1
+    units_spec.extend(_emit_side_block(n_f, ya, yf0, "frente", bool(proyecto.frente_exterior)))
     # Filas izquierda (wet al corredor, dormitorios a franja izq). Arrancan en
     # yf0 (no tras el núcleo): la franja junto a escalera que el núcleo no
     # ocupa en X se suma a la primera fila en vez de quedar remanente muerto
@@ -1637,30 +1699,10 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
             "corners": ((ucr, r0), (ucr, r1), (xb - fz, r1), (xb - fz, r0)),
             "lado": "intermedio", "fachada": False,
         })
-    # Bloque fondo (puertas al remate del corredor)
-    _splits_b = _split_block(n_b)
-    for (u0, u1) in _splits_b:
-        units_spec.append({
-            "corners": ((u0, yb0), (u1, yb0), (u1, y_end), (u0, y_end)),
-            "lado": "fondo",
-            "fachada": bool(proyecto.fondo_exterior) or patio_depth >= 2.5,
-        })
-
-    # ── Franjas de pozo en medianeras: acotadas SOLO a las filas intermedias
-    # que ventilan (zona media ± solape) — nunca invaden bloques frente/fondo,
-    # que ventilan a calle/patio y no requieren pozo lateral (G1, RNE A.010:
-    # el pozo se dimensiona frente a los ambientes que sirve, no de punta a punta) ──
-    pozos_final, cumple_final = [], []
-    franja_izq = Polygon([(xa, yf0 - _solape), (xa + fz, yf0 - _solape),
-                          (xa + fz, yb0 + _solape), (xa, yb0 + _solape)])
-    franja_der = Polygon([(xb - fz, yf0 - _solape), (xb, yf0 - _solape),
-                          (xb, yb0 + _solape), (xb - fz, yb0 + _solape)])
-    for fp_raw in (franja_izq, franja_der):
-        fp = safe_clip(fp_raw, lote_util)
-        if fp is not None and not fp.is_empty and fp.area > 0.5:
-            pozos_final.append(fp)
-            cumple_final.append(franja_conf)
-    pozos_union = unary_union(pozos_final).buffer(0.0) if pozos_final else None
+    # Bloque fondo (puertas al remate del corredor) — con fusión F1
+    units_spec.extend(_emit_side_block(
+        n_b, y_end, yb0, "fondo",
+        bool(proyecto.fondo_exterior) or patio_depth >= 2.5))
 
     # E3: hall = solo pasillo compacto. Remanentes van a "remanentes_zona_media"
     # (incluidos en footprint pero NO en pct_circ). E4 los convierte en dptos.
@@ -1685,24 +1727,34 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
     ductos: List[Polygon] = []
     departamentos_detalle: List[Dict[str, Any]] = []
     sin_acceso = 0
-    core_union = unary_union(core_items).buffer(0.0)
     for spec in units_spec:
         corners = spec["corners"]
-        ap = safe_clip(Polygon(corners), lote_util)
-        if ap is None or ap.is_empty:
-            continue
-        for sub in (pozos_union, core_union):
-            if sub is not None and ap.intersects(sub):
-                d_ = ap.difference(sub)
-                if hasattr(d_, "geoms"):
-                    d_ = max(d_.geoms, key=lambda g: g.area)
-                ap = d_
-        if hall_clipped is not None:
-            ap = ap.difference(hall_clipped.buffer(0.0))
-            if hasattr(ap, "geoms"):
-                ap = max(ap.geoms, key=lambda g: g.area)
-        if ap.is_empty or ap.area < min_area_dpto * 0.85:
-            continue
+        if "prebuilt" in spec:
+            # F1: frente/fondo ya vinieron clipados+restados (pozo/núcleo/
+            # hall) y con área NETA validada ≥ mínimo RNE en _emit_side_block
+            # — no se re-hace el recorte (evita divergencia de resultado).
+            ap = spec["prebuilt"]
+        else:
+            ap = safe_clip(Polygon(corners), lote_util)
+            if ap is None or ap.is_empty:
+                continue
+            for sub in (pozos_union, core_union):
+                if sub is not None and ap.intersects(sub):
+                    d_ = ap.difference(sub)
+                    if hasattr(d_, "geoms"):
+                        d_ = max(d_.geoms, key=lambda g: g.area)
+                    ap = d_
+            if hall_clipped is not None:
+                ap = ap.difference(hall_clipped.buffer(0.0))
+                if hasattr(ap, "geoms"):
+                    ap = max(ap.geoms, key=lambda g: g.area)
+            # Filas intermedias (único caso que llega aquí): SIN fusión
+            # propia todavía (F1 solo cubre frente/fondo, que ya filtran por
+            # área neta en _emit_side_block). Se mantiene el filtro bruto
+            # previo aquí — endurecerlo sin fusión de respaldo solo abre
+            # huecos sin construir (medido: tests_cabida huecos_sin_pz).
+            if ap.is_empty or ap.area < min_area_dpto * 0.85:
+                continue
         if hall_clipped is not None and not _door_access(ap, hall_clipped):
             sin_acceso += 1
             continue
