@@ -1131,61 +1131,82 @@ export class Viewer3D {
       position: 'absolute', top: '10px', right: '10px',
       width: SZ + 'px', height: SZ + 'px',
       zIndex: '36', cursor: 'pointer', display: 'none',
-      borderRadius: '8px', boxShadow: '0 2px 10px rgba(0,0,0,0.30)',
     });
 
     const gRend = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
     gRend.setPixelRatio(window.devicePixelRatio || 1);
     gRend.setSize(SZ, SZ, false);
-    gRend.setClearColor(0x1e293b, 0.78);
+    gRend.setClearColor(0x000000, 0);
 
     const gScene = new THREE.Scene();
-    gScene.add(new THREE.AmbientLight(0xffffff, 2.0));
-    const dl = new THREE.DirectionalLight(0xffffff, 0.8);
-    dl.position.set(2, 2, 4); gScene.add(dl);
 
-    // Textura de cara
-    const _faceTex = (label, bg) => {
+    // Textura de cara — navy sólido de marca, label blanco; variante hover más clara
+    const _faceTex = (label, hover) => {
       const c = document.createElement('canvas');
-      c.width = c.height = 128;
+      c.width = c.height = 256;
       const ctx = c.getContext('2d');
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, 128, 128);
-      ctx.strokeStyle = 'rgba(148,163,184,0.9)';
-      ctx.lineWidth = 6; ctx.strokeRect(3, 3, 122, 122);
-      ctx.fillStyle = '#f1f5f9';
-      ctx.font = 'bold 24px Inter,system-ui,sans-serif';
+      const g = ctx.createLinearGradient(0, 0, 256, 256);
+      if (hover) { g.addColorStop(0, '#3d4468'); g.addColorStop(1, '#2c3151'); }
+      else       { g.addColorStop(0, '#2a2f4d'); g.addColorStop(1, '#1a1e35'); }
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, 256, 256);
+      ctx.strokeStyle = hover ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.14)';
+      ctx.lineWidth = 4; ctx.strokeRect(2, 2, 252, 252);
+      ctx.fillStyle = hover ? '#ffffff' : 'rgba(255,255,255,0.92)';
+      ctx.font = '600 40px Inter,system-ui,sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(label, 64, 64);
-      return new THREE.CanvasTexture(c);
+      ctx.letterSpacing = '3px';
+      ctx.fillText(label, 128, 128);
+      const t = new THREE.CanvasTexture(c);
+      t.anisotropy = 4;
+      if (THREE.SRGBColorSpace) t.colorSpace = THREE.SRGBColorSpace;
+      return t;
     };
 
     // Orden BoxGeometry: +X, -X, +Y, -Y, +Z, -Z  (Z-up: +Z=TOP)
     const FACES = [
-      { label: 'DER',    bg: '#1e3a5f', view: 'right'  },  // +X
-      { label: 'IZQ',    bg: '#1e3a5f', view: 'left'   },  // -X
-      { label: 'FONDO',  bg: '#14532d', view: 'back'   },  // +Y
-      { label: 'FRENTE', bg: '#14532d', view: 'front'  },  // -Y
-      { label: 'TOP',    bg: '#3b0764', view: 'top'    },  // +Z
-      { label: 'BASE',   bg: '#1c1917', view: 'bottom' },  // -Z
+      { label: 'DER',    view: 'right'  },  // +X
+      { label: 'IZQ',    view: 'left'   },  // -X
+      { label: 'FONDO',  view: 'back'   },  // +Y
+      { label: 'FRENTE', view: 'front'  },  // -Y
+      { label: 'TOP',    view: 'top'    },  // +Z
+      { label: 'BASE',   view: 'bottom' },  // -Z
     ];
-    const mats = FACES.map(f =>
-      new THREE.MeshStandardMaterial({ map: _faceTex(f.label, f.bg), side: THREE.DoubleSide })
+    const baseTex  = FACES.map(f => _faceTex(f.label, false));
+    const hoverTex = FACES.map(f => _faceTex(f.label, true));
+    const mats = baseTex.map(t =>
+      new THREE.MeshBasicMaterial({ map: t, side: THREE.DoubleSide })
     );
 
     const cube  = new THREE.Mesh(new THREE.BoxGeometry(1.55, 1.55, 1.55), mats);
     const edges = new THREE.LineSegments(
-      new THREE.EdgesGeometry(new THREE.BoxGeometry(1.57, 1.57, 1.57)),
-      new THREE.LineBasicMaterial({ color: 0x94a3b8, linewidth: 1 })
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(1.56, 1.56, 1.56)),
+      new THREE.LineBasicMaterial({ color: 0x6d739a, transparent: true, opacity: 0.9 })
     );
     gScene.add(cube); gScene.add(edges);
 
     const gCam = new THREE.PerspectiveCamera(36, 1, 0.1, 50);
     gCam.up.set(0, 0, 1);
 
-    // ── Drag-to-orbit + click-to-snap ──────────────────────
+    // ── Drag-to-orbit + click-to-snap + hover highlight ────
     const raycaster = new THREE.Raycaster();
     let _drag = null;
+    let _hoverFace = -1;
+
+    const _faceAt = (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const mx = ((e.clientX - rect.left) / rect.width)  * 2 - 1;
+      const my = -((e.clientY - rect.top)  / rect.height) * 2 + 1;
+      raycaster.setFromCamera(new THREE.Vector2(mx, my), gCam);
+      const hits = raycaster.intersectObject(cube);
+      return hits.length ? Math.floor(hits[0].faceIndex / 2) : -1;
+    };
+    const _setHover = (fi) => {
+      if (fi === _hoverFace) return;
+      if (_hoverFace >= 0) mats[_hoverFace].map = baseTex[_hoverFace];
+      if (fi >= 0)         mats[fi].map = hoverTex[fi];
+      _hoverFace = fi;
+    };
 
     canvas.addEventListener('pointerdown', e => {
       canvas.setPointerCapture(e.pointerId);
@@ -1194,7 +1215,7 @@ export class Viewer3D {
     });
 
     canvas.addEventListener('pointermove', e => {
-      if (!_drag) return;
+      if (!_drag) { _setHover(_faceAt(e)); return; }
       const dx = e.clientX - _drag.x;
       const dy = e.clientY - _drag.y;
       _drag.totalMove += Math.abs(dx) + Math.abs(dy);
@@ -1206,6 +1227,8 @@ export class Viewer3D {
       _drag.y = e.clientY;
       _drag.lastE = e;
     });
+
+    canvas.addEventListener('pointerleave', () => { if (!_drag) _setHover(-1); });
 
     canvas.addEventListener('pointerup', e => {
       if (!_drag) return;

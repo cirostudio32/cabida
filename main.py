@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import os
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Tuple, Optional, Dict, Any
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
@@ -81,6 +81,18 @@ async def serve_viewer3d_js():
     path = os.path.join(BASE_DIR, "viewer3d.js")
     print(f"Serving viewer3d.js from: {path}")
     return FileResponse(path)
+
+@app.get("/ui-fx.js")
+async def serve_ui_fx_js():
+    return FileResponse(os.path.join(BASE_DIR, "ui-fx.js"))
+
+@app.get("/logo.png")
+async def serve_logo_png():
+    return FileResponse(os.path.join(BASE_DIR, "logo.png"))
+
+@app.get("/nombre.png")
+async def serve_nombre_png():
+    return FileResponse(os.path.join(BASE_DIR, "nombre.png"))
 
 # ═══════════════════════════════════════════════════════════════
 # CONFIGURACIÓN MAESTRA RNE (Reglamento Nacional de Edificaciones)
@@ -169,27 +181,30 @@ def _check_mivivienda(proyecto: "ProyectoInmobiliario", unidades_meta: list) -> 
 
 
 class ProyectoInmobiliario(BaseModel):
-    coordenadas_lote: List[Tuple[float, float]]
-    area_bruta_terreno: float
-    numero_pisos: int
-    retiro_frontal: float
-    zonificacion: str
-    num_ascensores: int
-    num_departamentos: int
-    frente: Optional[float] = 10.0
-    fondo: Optional[float] = 10.0
-    derecha: Optional[float] = 20.0
-    izquierda: Optional[float] = 20.0
-    altura_piso: Optional[float] = 2.80
-    pct_estac: Optional[float] = 30.0
+    # Límites defensivos: evitan que un payload malicioso/erróneo (miles de
+    # vértices, pisos = 10**9, etc.) cuelgue el proceso (CPU/memoria) del
+    # único worker del backend público.
+    coordenadas_lote: List[Tuple[float, float]] = Field(..., min_length=3, max_length=200)
+    area_bruta_terreno: float = Field(..., gt=0, le=200_000)
+    numero_pisos: int = Field(..., ge=1, le=60)
+    retiro_frontal: float = Field(..., ge=0, le=100)
+    zonificacion: str = Field(..., max_length=50)
+    num_ascensores: int = Field(..., ge=0, le=20)
+    num_departamentos: int = Field(..., ge=0, le=500)
+    frente: Optional[float] = Field(10.0, gt=0, le=1000)
+    fondo: Optional[float] = Field(10.0, gt=0, le=1000)
+    derecha: Optional[float] = Field(20.0, gt=0, le=1000)
+    izquierda: Optional[float] = Field(20.0, gt=0, le=1000)
+    altura_piso: Optional[float] = Field(2.80, gt=0, le=10)
+    pct_estac: Optional[float] = Field(30.0, ge=0, le=100)
     ciego_frente: Optional[bool] = False
     ciego_fondo: Optional[bool] = True
     ciego_derecha: Optional[bool] = True
     ciego_izquierda: Optional[bool] = True
-    retiro_lateral: Optional[float] = 2.30
-    retiro_posterior: Optional[float] = 2.30
+    retiro_lateral: Optional[float] = Field(2.30, ge=0, le=100)
+    retiro_posterior: Optional[float] = Field(2.30, ge=0, le=100)
     # Esquema de área libre: "muros_ciegos" | "patio_posterior" | "ducto_central"
-    esquema_area_libre: Optional[str] = "muros_ciegos"
+    esquema_area_libre: Optional[str] = Field("muros_ciegos", max_length=50)
     # Si True, ignora num_departamentos y emite capacidad máxima viable.
     optimizar_densidad: Optional[bool] = False
     # Precios de venta por tipología (PEN/m²). Si se proveen, activa optimizador de mix.
@@ -199,11 +214,11 @@ class ProyectoInmobiliario(BaseModel):
     derecha_exterior: Optional[bool] = False    # True si lado derecho da a exterior
     izquierda_exterior: Optional[bool] = False  # True si lado izquierdo da a exterior
     mix_tipologias: Optional[Dict[str, int]] = None  # Ej: {"1D": 1, "2D": 3, "3D": 2}
-    area_libre_min_pct: Optional[float] = 0.0       # % mínimo de área libre del lote (ej: 20.0)
+    area_libre_min_pct: Optional[float] = Field(0.0, ge=0, le=100)       # % mínimo de área libre del lote (ej: 20.0)
     # Overrides del certificado de parámetros municipal (None = usar tabla de zona)
-    cus_maximo: Optional[float] = None
-    altura_maxima_pisos: Optional[int] = None
-    densidad_maxima_hab_ha: Optional[float] = None
+    cus_maximo: Optional[float] = Field(None, gt=0, le=50)
+    altura_maxima_pisos: Optional[int] = Field(None, ge=1, le=60)
+    densidad_maxima_hab_ha: Optional[float] = Field(None, gt=0, le=10_000)
     # True = reducir pisos automáticamente hasta cumplir altura/CUS/densidad.
     # False (default) = respetar los pisos solicitados y reportar incumplimientos.
     ajustar_pisos_normativa: Optional[bool] = False
@@ -1970,14 +1985,32 @@ def _generate_costillas(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
 
 
 # ═══════════════════════════════════════════════════════════════
-# TOPOLOGÍA COSTILLAS — DOS NÚCLEOS (P1: ancho >24m o fondo >38m)
-# Dos torres tipo-costillas independientes con patio central y junta
-# constructiva. Reusa _generate_costillas dos veces sobre sub-lotes ya
-# eroded (retiros reales aplicados una sola vez, sobre el lote completo)
+# TOPOLOGÍA COSTILLAS — N NÚCLEOS (lotes grandes)
+# N torres tipo-costillas independientes con patios/juntas constructivas
+# entre ellas. Reusa _generate_costillas una vez por torre sobre sub-lotes
+# ya eroded (retiros reales aplicados una sola vez, sobre el lote completo)
 # para no duplicar la lógica de generación por fila/pozo/hall.
+#
+# nº de torres = por área (≥1800m²→2, +1 cada 900m²) acotado por:
+#   - evacuación RNE: torre ≤26m ancho (núcleo no queda >30m de un extremo)
+#   - factibilidad: cada tira ≥13m + junta 3m entre torres
 # ═══════════════════════════════════════════════════════════════
 DOS_NUCLEOS_W_MIN = 24.0
 PATIO_CENTRAL_GAP = 3.0  # ancho del patio/junta entre torres
+TORRE_W_MAX = 26.0       # ancho máx por torre (evacuación)
+TORRE_W_MIN = 13.0       # ancho mín por torre (costillas viable)
+
+# Etapa de desarrollo: por ahora 1 sola torre (lotes ≤1400 m², tope validado en
+# el frontend). El motor N-torres queda listo pero dormido — reactivar con True.
+MULTI_TORRE_ENABLED = False
+
+
+def _n_torres(w_util: float, area_util: float) -> int:
+    """Cuántas torres tipo-costillas caben/convienen en el lote útil."""
+    n_area = 1 if area_util < 1800.0 else 2 + int((area_util - 1800.0) // 900.0)
+    n_ancho = math.ceil(w_util / TORRE_W_MAX) if w_util > 0 else 1
+    n_cabe = int((w_util + PATIO_CENTRAL_GAP) // (TORRE_W_MIN + PATIO_CENTRAL_GAP))
+    return max(1, min(max(n_area, n_ancho), max(1, n_cabe)))
 
 
 def _generate_costillas_dos_nucleos(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds_y,
@@ -1989,116 +2022,130 @@ def _generate_costillas_dos_nucleos(proyecto, lote, cx, cy, dl_x, dl_y, ds_x, ds
     lote_util = _erode_lote(lote, r_lat, r_pos) or lote
     bx0, by0, bx1, by1 = lote_util.bounds
     W = bx1 - bx0
-    if W < DOS_NUCLEOS_W_MIN:
-        return None, None
 
-    mid_x = (bx0 + bx1) / 2
-    xl_cut = mid_x - PATIO_CENTRAL_GAP / 2
-    xr_cut = mid_x + PATIO_CENTRAL_GAP / 2
+    n_torres = _n_torres(W, float(lote_util.area))
+    if n_torres < 2:
+        return None, None  # una sola torre → costillas normal
+
+    # N tiras verticales de igual ancho, separadas por junta constructiva.
+    usable = W - (n_torres - 1) * PATIO_CENTRAL_GAP
+    strip_w = usable / n_torres
+    if strip_w < TORRE_W_MIN:
+        return None, None  # no cabe: dejar que costillas normal resuelva
+
     K = 10000.0
-    half_izq = Polygon([(bx0 - K, by0 - K), (xl_cut, by0 - K), (xl_cut, by1 + K), (bx0 - K, by1 + K)])
-    half_der = Polygon([(xr_cut, by0 - K), (bx1 + K, by0 - K), (bx1 + K, by1 + K), (xr_cut, by1 + K)])
-    lote_l = safe_clip(half_izq, lote_util)
-    lote_r = safe_clip(half_der, lote_util)
-    if lote_l is None or lote_l.is_empty or lote_r is None or lote_r.is_empty:
-        return None, None
-    Wl = lote_l.bounds[2] - lote_l.bounds[0]
-    Wr = lote_r.bounds[2] - lote_r.bounds[0]
-    if Wl < 13.0 or Wr < 13.0:
-        return None, None  # cada torre necesita el mínimo de costillas por sí sola
+    sub_lotes = []
+    cuts = []  # (x_ini_junta, x_fin_junta) de cada patio entre torres
+    x = bx0
+    for i in range(n_torres):
+        x0 = x
+        x1 = x + strip_w
+        strip_box = Polygon([(x0, by0 - K), (x1, by0 - K), (x1, by1 + K), (x0, by1 + K)])
+        strip = safe_clip(strip_box, lote_util)
+        if strip is None or strip.is_empty or (strip.bounds[2] - strip.bounds[0]) < TORRE_W_MIN:
+            return None, None
+        sub_lotes.append(strip)
+        if i < n_torres - 1:
+            cuts.append((x1, x1 + PATIO_CENTRAL_GAP))
+        x = x1 + PATIO_CENTRAL_GAP
 
     # Retiros ya aplicados sobre lote_util antes del corte: cada sub-torre
-    # recibe retiro 0 para no erosionar de nuevo (incluyendo el corte central,
-    # que es junta constructiva, no medianera con retiro).
+    # recibe retiro 0 para no erosionar de nuevo (las juntas centrales son
+    # constructivas, no medianeras con retiro).
     try:
         proyecto_sub = proyecto.model_copy(update={"retiro_lateral": 0.0, "retiro_posterior": 0.0})
     except AttributeError:  # pydantic v1
         proyecto_sub = proyecto.copy(update={"retiro_lateral": 0.0, "retiro_posterior": 0.0})
 
-    nd_l = round(num_dptos * Wl / (Wl + Wr))
-    nd_l = max(1, min(num_dptos - 1, nd_l))
-    nd_r = num_dptos - nd_l
-    asc_l_n = 1 if nec_ascensor else 0
-    asc_r_n = 1 if nec_ascensor else 0
+    # num_departamentos es POR torre (tiras de igual ancho → torres idénticas).
+    # No se divide entre torres: cada una recibe el total solicitado.
+    nd_por_torre = [max(1, num_dptos) for _ in range(n_torres)]
+    asc_por_torre = 1 if nec_ascensor else 0
 
-    args_l = (proyecto_sub, lote_l, cx, cy, dl_x, dl_y, ds_x, ds_y, half_L, half_S, hw,
-              nd_l, asc_l_n, nec_esc_prot, nec_ascensor, pozo_final, h_edif)
-    args_r = (proyecto_sub, lote_r, cx, cy, dl_x, dl_y, ds_x, ds_y, half_L, half_S, hw,
-              nd_r, asc_r_n, nec_esc_prot, nec_ascensor, pozo_final, h_edif)
-    g_l, n_l = _generate_costillas(*args_l)
-    g_r, n_r = _generate_costillas(*args_r)
-    if g_l is None or g_r is None:
-        return None, None
+    gs, ns = [], []
+    for i, strip in enumerate(sub_lotes):
+        args = (proyecto_sub, strip, cx, cy, dl_x, dl_y, ds_x, ds_y, half_L, half_S, hw,
+                nd_por_torre[i], asc_por_torre, nec_esc_prot, nec_ascensor, pozo_final, h_edif)
+        g_i, n_i = _generate_costillas(*args)
+        if g_i is None:
+            return None, None
+        gs.append(g_i)
+        ns.append(n_i)
 
-    patio_central = safe_clip(Polygon([
-        (xl_cut, by0), (xr_cut, by0), (xr_cut, by1), (xl_cut, by1),
-    ]), lote_util)
+    patios = [safe_clip(Polygon([
+        (xa, by0), (xb, by0), (xb, by1), (xa, by1),
+    ]), lote_util) for (xa, xb) in cuts]
+    patios_js = [poly_to_js(p) for p in patios if p is not None and not p.is_empty]
+
+    def _concat(key):
+        out = []
+        for g in gs:
+            out += g[key]
+        return out
 
     geometry = {
-        "hall": g_l["hall"],
-        "halls": [g_l["hall"], g_r["hall"]],
-        "core": g_l["core"],
-        "cores": [g_l["core"], g_r["core"]],
-        "escalera": g_l["escalera"],
-        "escaleras": [g_l["escalera"], g_r["escalera"]],
-        "ascensores": g_l["ascensores"] + g_r["ascensores"],
-        "ascensores_por_nucleo": [g_l["ascensores"], g_r["ascensores"]],
-        "vestibulo": g_l["vestibulo"] or g_r["vestibulo"],
-        "vestibulos": [g_l["vestibulo"], g_r["vestibulo"]],
-        "patio": g_l["patio"] or g_r["patio"],
-        "patio_central": poly_to_js(patio_central) if patio_central else [],
+        "hall": gs[0]["hall"],
+        "halls": [g["hall"] for g in gs],
+        "core": gs[0]["core"],
+        "cores": [g["core"] for g in gs],
+        "escalera": gs[0]["escalera"],
+        "escaleras": [g["escalera"] for g in gs],
+        "ascensores": _concat("ascensores"),
+        "ascensores_por_nucleo": [g["ascensores"] for g in gs],
+        "vestibulo": next((g["vestibulo"] for g in gs if g["vestibulo"]), gs[0]["vestibulo"]),
+        "vestibulos": [g["vestibulo"] for g in gs],
+        "patio": next((g["patio"] for g in gs if g["patio"]), gs[0]["patio"]),
+        "patio_central": patios_js[0] if patios_js else [],
+        "patios_centrales": patios_js,
         # Un núcleo completo (hall+escalera+ascensores+vestíbulo+core) por
         # torre -- consumido por primer_piso/sótano/azotea para no tratar
-        # las dos torres como si compartieran un único núcleo global.
+        # las torres como si compartieran un único núcleo global.
         "nucleos": [
-            {"hall": g_l["hall"], "escalera": g_l["escalera"],
-             "ascensores": g_l["ascensores"], "vestibulo": g_l["vestibulo"],
-             "core": g_l["core"]},
-            {"hall": g_r["hall"], "escalera": g_r["escalera"],
-             "ascensores": g_r["ascensores"], "vestibulo": g_r["vestibulo"],
-             "core": g_r["core"]},
+            {"hall": g["hall"], "escalera": g["escalera"],
+             "ascensores": g["ascensores"], "vestibulo": g["vestibulo"],
+             "core": g["core"]}
+            for g in gs
         ],
-        "ductos": g_l["ductos"] + g_r["ductos"],
-        "remanentes_zona_media": g_l["remanentes_zona_media"] + g_r["remanentes_zona_media"],
-        "pozos_luz": g_l["pozos_luz"] + g_r["pozos_luz"],
-        "pozos_luz_cumple": g_l["pozos_luz_cumple"] + g_r["pozos_luz_cumple"],
-        "columnas": g_l["columnas"] + g_r["columnas"],
+        "ductos": _concat("ductos"),
+        "remanentes_zona_media": _concat("remanentes_zona_media"),
+        "pozos_luz": _concat("pozos_luz"),
+        "pozos_luz_cumple": _concat("pozos_luz_cumple"),
+        "columnas": _concat("columnas"),
         "esquema_area_libre": "costillas_dos_nucleos",
-        "departamentos": g_l["departamentos"] + g_r["departamentos"],
+        "departamentos": _concat("departamentos"),
         "cabida_multifamiliar": {
-            "contexto": "Perú — costillas dos núcleos: dos torres independientes con patio central y junta constructiva (P1, ancho >24m)",
-            "area_min_dpto_m2": g_l["cabida_multifamiliar"]["area_min_dpto_m2"],
-            "departamentos_solicitados_planta": num_dptos,
-            "capacidad_maxima_estimada_planta": (g_l["cabida_multifamiliar"]["capacidad_maxima_estimada_planta"]
-                                                  + g_r["cabida_multifamiliar"]["capacidad_maxima_estimada_planta"]),
-            "departamentos_generados_planta": len(g_l["departamentos"]) + len(g_r["departamentos"]),
-            "nota": "Dos torres tipo-costillas separadas por patio central (junta constructiva); cada una con núcleo propio.",
+            "contexto": f"Perú — costillas {n_torres} núcleos: torres independientes con juntas constructivas (lote grande)",
+            "area_min_dpto_m2": gs[0]["cabida_multifamiliar"]["area_min_dpto_m2"],
+            "departamentos_solicitados_planta": num_dptos * n_torres,
+            "capacidad_maxima_estimada_planta": sum(g["cabida_multifamiliar"]["capacidad_maxima_estimada_planta"] for g in gs),
+            "departamentos_generados_planta": sum(len(g["departamentos"]) for g in gs),
+            "nota": f"{n_torres} torres tipo-costillas separadas por juntas constructivas; cada una con núcleo propio.",
         },
-        "topologia": g_l["topologia"],
+        "topologia": gs[0]["topologia"],
     }
+    pozos_cumple = geometry["pozos_luz_cumple"]
     normativa = {
         "pozo_final": r3(pozo_final),
         "pozos_luz_check": {
             "colocados": len(geometry["pozos_luz"]),
-            "conformes": sum(1 for ok in geometry["pozos_luz_cumple"] if ok),
-            "no_conformes": sum(1 for ok in geometry["pozos_luz_cumple"] if not ok),
-            "ok": all(geometry["pozos_luz_cumple"]),
-            "nota": "Dos torres, franjas de pozo continuas por torre en ambas medianeras.",
+            "conformes": sum(1 for ok in pozos_cumple if ok),
+            "no_conformes": sum(1 for ok in pozos_cumple if not ok),
+            "ok": all(pozos_cumple),
+            "nota": f"{n_torres} torres, franjas de pozo continuas por torre en ambas medianeras.",
         },
         "ascensor_obligatorio": nec_ascensor,
         "esc_protegida_obligatoria": nec_esc_prot,
         "evacuacion_max": RNE["circulacion_v"]["evacuacion_max"],
-        "area_min_dpto": n_l["area_min_dpto"],
+        "area_min_dpto": ns[0]["area_min_dpto"],
         "dotaciones": RNE["instalaciones"],
         "estacionamiento_ancho": RNE["estacionamientos"]["ancho_ind"],
         "cabida_planta": {
-            "departamentos_pedidos": num_dptos,
+            "departamentos_pedidos": num_dptos * n_torres,
             "departamentos_emitidos": len(geometry["departamentos"]),
             "capacidad_max_estimada_planta": geometry["cabida_multifamiliar"]["capacidad_maxima_estimada_planta"],
-            "descartados_sin_acceso": (n_l["cabida_planta"]["descartados_sin_acceso"]
-                                        + n_r["cabida_planta"]["descartados_sin_acceso"]),
+            "descartados_sin_acceso": sum(n["cabida_planta"]["descartados_sin_acceso"] for n in ns),
         },
-        "topologia": g_l["topologia"],
+        "topologia": gs[0]["topologia"],
     }
     return geometry, normativa
 
@@ -3037,13 +3084,10 @@ def _generate_geometry(proyecto: ProyectoInmobiliario):
         return g, n
 
     if _topo_s["recomendada"] == "hall_compacto":
-        # 0º: dos núcleos (P1: ancho útil >24m) — dos torres costillas con
-        # patio central y junta constructiva, cada una con núcleo propio.
-        _r_lat_dn = float(proyecto.retiro_lateral or 0.0)
-        _r_pos_dn = float(proyecto.retiro_posterior or 0.0)
-        _lu_dn = _erode_lote(lote, _r_lat_dn, _r_pos_dn) or lote
-        _W_dn = _lu_dn.bounds[2] - _lu_dn.bounds[0]
-        if _W_dn >= DOS_NUCLEOS_W_MIN:
+        # 0º: N núcleos (lotes grandes) — nº de torres por área/ancho, cada una
+        # con núcleo propio y junta constructiva entre torres. Dormido en etapa
+        # de desarrollo (MULTI_TORRE_ENABLED): por ahora 1 torre hasta 1400 m².
+        if MULTI_TORRE_ENABLED:
             _g, _n = _generate_costillas_dos_nucleos(*_args)
             if _g is not None:
                 return _emit(_g, _n, "costillas_dos_nucleos")
@@ -5455,3 +5499,123 @@ async def validar_arquitectura(
     }
 
     return response
+
+
+# ═══════════════════════════════════════════════════════════════
+# EVALUACIÓN DE LAYOUT EDITADO A MANO (Modo Edición)
+# ═══════════════════════════════════════════════════════════════
+
+class LayoutManual(BaseModel):
+    """Layout de planta típica editado/dibujado en el frontend.
+    Todas las coordenadas en el mismo marco normalizado del payload WebGL
+    (centrado en el centroide del lote)."""
+    lote_coords: List[List[float]] = Field(..., min_length=3, max_length=200)
+    unidades: List[Dict[str, Any]] = Field(..., max_length=200)  # {id, tipologia, coords: [[x,y],...]}
+    hall_coords: List[List[float]] = Field(default_factory=list, max_length=200)
+    corridors: List[List[List[float]]] = Field(default_factory=list, max_length=100)
+    pozos_luz: List[List[List[float]]] = Field(default_factory=list, max_length=100)
+    retiro_lateral: float = Field(0.0, ge=0, le=100)
+    retiro_posterior: float = Field(0.0, ge=0, le=100)
+    numero_pisos: int = Field(7, ge=1, le=60)
+    altura_piso: float = Field(2.80, gt=0, le=10)
+
+
+@app.post("/evaluar-layout")
+async def evaluar_layout(datos: LayoutManual):
+    """Evalúa un layout editado a mano SIN regenerar la distribución.
+    Reusa _evaluar_diseno (huecos, circulación, eficiencia, acceso al hall,
+    pozos, frente mínimo) y agrega checks por unidad: área mínima RNE,
+    contención en lote útil y solapes entre polígonos."""
+    if len(datos.lote_coords) < 3:
+        raise HTTPException(status_code=400, detail="lote_coords inválido (mínimo 3 vértices)")
+
+    def _pts(c):
+        return [{"x": float(p[0]), "y": float(p[1])} for p in c]
+
+    lote_poly = Polygon(datos.lote_coords)
+    if not lote_poly.is_valid:
+        lote_poly = lote_poly.buffer(0)
+    if lote_poly.is_empty:
+        raise HTTPException(status_code=400, detail="lote_coords no forma un polígono válido")
+
+    geometry: dict = {
+        "hall": _pts(datos.hall_coords) if len(datos.hall_coords) >= 3 else [],
+        "corridors": [_pts(c) for c in datos.corridors if len(c) >= 3],
+        "pozos_luz": [_pts(c) for c in datos.pozos_luz if len(c) >= 3],
+        "departamentos": [],
+    }
+
+    unit_polys: list = []  # (id, tipologia, area, shapely_poly)
+    for i, u in enumerate(datos.unidades):
+        coords = u.get("coords") or []
+        if len(coords) < 3:
+            continue
+        pts = _pts(coords)
+        area = r3(calc_poly_area(pts))
+        tip = u.get("tipologia") or get_typology(area)
+        geometry["departamentos"].append({"contorno": pts, "area_m2": area, "tipologia": tip})
+        try:
+            poly = Polygon(coords)
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+        except Exception:
+            continue
+        unit_polys.append((u.get("id") or f"X{i + 1:02d}", tip, area, poly))
+
+    h_edif = datos.numero_pisos * (datos.altura_piso or RNE["altura_piso"])
+    pozo_req = max(RNE["pozos_luz"]["min_abs"], h_edif * RNE["pozos_luz"]["ratio_dorm"])
+    ev = _evaluar_diseno(geometry, lote_poly, datos.retiro_lateral, datos.retiro_posterior,
+                         num_dptos=len(unit_polys), pozo_req=pozo_req)
+    defectos = ev["defectos"]
+
+    # ── Checks por unidad (el generador los garantiza; a mano no) ──
+    lote_util = _erode_lote(lote_poly, datos.retiro_lateral, datos.retiro_posterior) or lote_poly
+    area_min = RNE["departamentos"]["min_multifamiliar"]
+    hall_poly = None
+    if geometry["hall"]:
+        try:
+            hall_poly = Polygon([(p["x"], p["y"]) for p in geometry["hall"]])
+            if not hall_poly.is_valid:
+                hall_poly = hall_poly.buffer(0)
+        except Exception:
+            pass
+
+    unidades_res = []
+    for i, (uid, tip, area, poly) in enumerate(unit_polys):
+        issues = []
+        if area + 1e-6 < area_min:
+            issues.append(f"área {area:.1f}m² < mínimo RNE {area_min:.0f}m²")
+        try:
+            fuera = poly.difference(lote_util.buffer(0.05)).area
+            if fuera > 0.5:
+                issues.append(f"{fuera:.1f}m² fuera del lote útil (retiros)")
+        except Exception:
+            pass
+        for j in range(i + 1, len(unit_polys)):
+            try:
+                inter = poly.intersection(unit_polys[j][3]).area
+                if inter > 0.25:
+                    issues.append(f"solape {inter:.1f}m² con {unit_polys[j][0]}")
+            except Exception:
+                pass
+        if hall_poly is not None:
+            try:
+                inter_h = poly.intersection(hall_poly).area
+                if inter_h > 0.25:
+                    issues.append(f"solape {inter_h:.1f}m² con el hall")
+            except Exception:
+                pass
+        for msg in issues:
+            defectos.append({"tipo": "unidad", "severidad": "critico",
+                             "descripcion": f"DPTO {uid}: {msg}"})
+        unidades_res.append({"id": uid, "tipologia": tip, "area": area, "issues": issues})
+
+    n_criticos = sum(1 for d in defectos if d["severidad"] == "critico")
+    return {
+        "status": "conforme" if n_criticos == 0 else "observado",
+        "score": ev["score"],
+        "n_criticos": n_criticos,
+        "defectos": defectos,
+        "metricas": ev["metricas"],
+        "unidades": unidades_res,
+    }

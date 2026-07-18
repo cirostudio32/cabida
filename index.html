@@ -21,6 +21,9 @@
         }
     </script>
     
+    <!-- GSAP (animaciones UI) -->
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+
     <!-- Turf.js -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -33,26 +36,38 @@
 
 <body>
     <header class="top-nav">
-        <div class="brand">
-            <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" stroke-width="2" fill="none"
-                stroke-linecap="round" stroke-linejoin="round" class="logo-icon">
-                <path d="M3 21v-8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v8"></path>
-                <path d="M9 21v-4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v4"></path>
-                <path d="M21 11V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v5"></path>
-                <polyline points="12 2 12 4"></polyline>
-            </svg>
-            <h1>ArchGEN32</h1>
-            <span class="beta-tag">Beta creada por Ciro H.</span>
+        <div class="nav-glow" aria-hidden="true"></div>
+        <div class="nav-left">
+            <button id="btn-mobile-menu" class="mobile-menu-btn" aria-label="Abrir parámetros">
+                <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+            </button>
+            <div class="brand">
+                <img src="logo.png" alt="ArchGEN32" class="logo-icon">
+                <span class="beta-tag">Beta</span>
+                <span class="brand-credit">por Ciro H.</span>
+            </div>
+            <div class="brand-social">
+                <a class="social-btn" data-brand="linkedin" href="https://www.linkedin.com/in/cirohermoza32/" target="_blank" rel="noopener noreferrer" aria-label="LinkedIn">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M20.45 20.45h-3.55v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.36V9h3.41v1.56h.05c.48-.9 1.64-1.85 3.38-1.85 3.61 0 4.28 2.38 4.28 5.47v6.27zM5.34 7.43a2.06 2.06 0 1 1 0-4.12 2.06 2.06 0 0 1 0 4.12zM7.12 20.45H3.56V9h3.56z"/></svg>
+                </a>
+                <a class="social-btn" data-brand="whatsapp" href="https://wa.me/51973903176" target="_blank" rel="noopener noreferrer" aria-label="WhatsApp">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12.04 2.02c-5.5 0-9.96 4.46-9.96 9.96 0 1.76.46 3.42 1.26 4.86L2 22l5.3-1.39a9.9 9.9 0 0 0 4.74 1.2h.01c5.5 0 9.96-4.46 9.96-9.96 0-2.66-1.03-5.16-2.92-7.04a9.87 9.87 0 0 0-7.05-2.79zm0 18.19h-.01a8.2 8.2 0 0 1-4.19-1.15l-.3-.18-3.14.82.84-3.06-.2-.31a8.23 8.23 0 0 1-1.26-4.35c0-4.55 3.7-8.25 8.26-8.25a8.2 8.2 0 0 1 5.84 2.42 8.2 8.2 0 0 1 2.42 5.84c0 4.55-3.7 8.22-8.26 8.22zm4.52-6.16c-.25-.12-1.47-.72-1.7-.81-.23-.08-.39-.12-.56.13-.17.25-.64.81-.78.97-.14.17-.29.19-.54.06-.25-.12-1.04-.38-1.98-1.22-.73-.65-1.23-1.46-1.37-1.7-.14-.25-.02-.38.11-.5.11-.11.25-.29.37-.43.12-.14.16-.25.25-.41.08-.17.04-.31-.02-.44-.06-.12-.56-1.36-.77-1.86-.2-.49-.41-.42-.56-.43h-.48c-.17 0-.44.06-.67.31-.23.25-.87.85-.87 2.08 0 1.23.89 2.41 1.02 2.58.12.17 1.75 2.67 4.24 3.74.59.26 1.05.41 1.41.52.59.19 1.13.16 1.55.1.47-.07 1.47-.6 1.68-1.19.21-.58.21-1.08.14-1.19-.06-.11-.23-.17-.48-.29z"/></svg>
+                </a>
+                <a class="social-btn" data-brand="instagram" href="https://www.instagram.com/ciro32h/" target="_blank" rel="noopener noreferrer" aria-label="Instagram">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="6"/><circle cx="12" cy="12" r="3.6"/><circle cx="17.15" cy="6.85" r="0.65" fill="currentColor" stroke="none"/></svg>
+                </a>
+            </div>
         </div>
         <div class="nav-actions">
-            <button id="btn-toggle-3d" class="btn-tool active-3d" style="background:#1e293b;color:white;border-color:#334155;margin-right:8px;font-weight:600">
-                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" style="vertical-align:middle;margin-right:4px"><path d="M12 3L2 7.5 12 12 22 7.5z"/><path d="M2 7.5v9L12 21l10-4.5v-9"/></svg> Volumetría 3D
+            <button id="btn-toggle-3d" class="btn-tool on-dark active-3d">
+                <svg class="icon-inline" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M12 3L2 7.5 12 12 22 7.5z"/><path d="M2 7.5v9L12 21l10-4.5v-9"/></svg> Volumetría 3D
             </button>
             <span class="sync-status">Guardado y en sincronía</span>
         </div>
     </header>
 
     <div class="app-layout">
+        <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
         <aside class="sidebar">
             <div class="tabs">
                 <button class="tab-btn active" data-tab="config-tab">Parámetros</button>
@@ -62,13 +77,13 @@
             <!-- Tab: Configuración -->
             <div id="config-tab" class="tab-content active">
                 <form id="params-form">
-                    <div class="accordion-panel expanded">
+                    <div class="accordion-panel expanded" id="panel-dimensiones-terreno">
                         <div class="accordion-header">
                             <h2>1. Dimensiones del Terreno</h2>
                         </div>
                         <div class="accordion-body">
                             <!-- Leyenda fachada -->
-                            <div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:0.78rem;color:#78350f;line-height:1.4;">
+                            <div class="legend-box">
                                 <strong>Fachada Exterior</strong> = lado que da a calle, pasaje o espacio público.<br>
                                 Dptos. con ese frente tienen ventilación e iluminación directa.<br>
                                 <strong>Fachada Interior</strong> = colinda con predio vecino (medianería) — requiere pozo de luz.
@@ -77,58 +92,54 @@
                                 <div class="input-group">
                                     <label for="frente">Frente (m)</label>
                                     <input type="number" id="frente" value="25" step="0.1" min="1" required>
-                                    <label class="toggle-switch mt-1"
-                                        style="transform: scale(0.85); transform-origin: left;"><input type="checkbox"
+                                    <label class="toggle-switch toggle-sm mt-1"><input type="checkbox"
                                             id="ciego-frente"><span class="slider"></span><span
                                             class="toggle-label">Muro Ciego</span></label>
-                                    <label class="toggle-switch mt-1" style="transform: scale(0.85); transform-origin: left;">
+                                    <label class="toggle-switch toggle-sm mt-1">
                                         <input type="checkbox" id="frente-exterior" checked>
                                         <span class="slider"></span>
                                         <span class="toggle-label">Da a calle (Fach. Ext.)</span>
                                     </label>
-                                    <div id="frente-fachada-hint" style="font-size:0.72rem;color:#64748b;margin-top:2px;">Fachada Exterior</div>
+                                    <div id="frente-fachada-hint" class="text-sm">Fachada Exterior</div>
                                 </div>
                                 <div class="input-group">
                                     <label for="fondo">Fondo (m)</label>
                                     <input type="number" id="fondo" value="28" step="0.1" min="1" required>
-                                    <label class="toggle-switch mt-1"
-                                        style="transform: scale(0.85); transform-origin: left;"><input type="checkbox"
+                                    <label class="toggle-switch toggle-sm mt-1"><input type="checkbox"
                                             id="ciego-fondo"><span class="slider"></span><span class="toggle-label">Muro
                                             Ciego</span></label>
-                                    <label class="toggle-switch mt-1" style="transform: scale(0.85); transform-origin: left;">
+                                    <label class="toggle-switch toggle-sm mt-1">
                                         <input type="checkbox" id="fondo-exterior">
                                         <span class="slider"></span>
                                         <span class="toggle-label">Da a calle (Fach. Ext.)</span>
                                     </label>
-                                    <div id="fondo-fachada-hint" style="font-size:0.72rem;color:#64748b;margin-top:2px;">Medianería / Fachada Interior</div>
+                                    <div id="fondo-fachada-hint" class="text-sm">Medianería / Fachada Interior</div>
                                 </div>
                                 <div class="input-group">
                                     <label for="derecha">Lado Derecho (m)</label>
                                     <input type="number" id="derecha" value="34" step="0.1" min="1" required>
-                                    <label class="toggle-switch mt-1"
-                                        style="transform: scale(0.85); transform-origin: left;"><input type="checkbox"
+                                    <label class="toggle-switch toggle-sm mt-1"><input type="checkbox"
                                             id="ciego-derecha" checked><span class="slider"></span><span
                                             class="toggle-label">Muro Ciego</span></label>
-                                    <label class="toggle-switch mt-1" style="transform: scale(0.85); transform-origin: left;">
+                                    <label class="toggle-switch toggle-sm mt-1">
                                         <input type="checkbox" id="derecha-exterior">
                                         <span class="slider"></span>
                                         <span class="toggle-label">Da a calle (Fach. Ext.)</span>
                                     </label>
-                                    <div id="derecha-fachada-hint" style="font-size:0.72rem;color:#64748b;margin-top:2px;">Medianería / Fachada Interior</div>
+                                    <div id="derecha-fachada-hint" class="text-sm">Medianería / Fachada Interior</div>
                                 </div>
                                 <div class="input-group">
                                     <label for="izquierda">Lado Izquierdo (m)</label>
                                     <input type="number" id="izquierda" value="29" step="0.1" min="1" required>
-                                    <label class="toggle-switch mt-1"
-                                        style="transform: scale(0.85); transform-origin: left;"><input type="checkbox"
+                                    <label class="toggle-switch toggle-sm mt-1"><input type="checkbox"
                                             id="ciego-izquierda" checked><span class="slider"></span><span
                                             class="toggle-label">Muro Ciego</span></label>
-                                    <label class="toggle-switch mt-1" style="transform: scale(0.85); transform-origin: left;">
+                                    <label class="toggle-switch toggle-sm mt-1">
                                         <input type="checkbox" id="izquierda-exterior">
                                         <span class="slider"></span>
                                         <span class="toggle-label">Da a calle (Fach. Ext.)</span>
                                     </label>
-                                    <div id="izquierda-fachada-hint" style="font-size:0.72rem;color:#64748b;margin-top:2px;">Medianería / Fachada Interior</div>
+                                    <div id="izquierda-fachada-hint" class="text-sm">Medianería / Fachada Interior</div>
                                 </div>
                             </div>
                             <div class="area-display">
@@ -137,7 +148,7 @@
                         </div>
                     </div>
 
-                    <div class="accordion-panel expanded">
+                    <div class="accordion-panel">
                         <div class="accordion-header">
                             <h2>2. Parámetros Normativos</h2>
                         </div>
@@ -154,7 +165,7 @@
                                         <option value="CZ">CZ — Comercio Zonal</option>
                                         <option value="CM">CM — Comercio Metropolitano</option>
                                     </select>
-                                    <div style="font-size:0.72rem;color:#64748b;margin-top:2px;">
+                                    <div class="text-sm">
                                         Los campos siguientes sobreescriben la tabla si los llenas
                                         (certificado de parámetros).
                                     </div>
@@ -191,10 +202,9 @@
                                     <label for="pisos">N° de Pisos: <b id="pisos-display">7</b></label>
                                     <input type="range" id="pisos-slider" value="7" min="1" max="50" step="1"
                                         style="width:100%">
-                                    <input type="number" id="pisos" value="7" step="1" min="1" max="50"
-                                        style="display:none">
-                                    <label style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:0.78em;cursor:pointer">
-                                        <input type="checkbox" id="ajustar-pisos" style="width:auto;margin:0">
+                                    <input type="number" id="pisos" value="7" step="1" min="1" max="50" class="hidden">
+                                    <label class="checkbox-inline-label">
+                                        <input type="checkbox" id="ajustar-pisos">
                                         Ajustar pisos automáticamente a normativa
                                     </label>
                                 </div>
@@ -209,8 +219,8 @@
                                     <input type="number" id="altura-piso" value="2.80" step="0.05" min="2.40" max="4.0">
                                 </div>
                                 <div class="input-group">
-                                    <label style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:0.78em;cursor:pointer">
-                                        <input type="checkbox" id="acogido-mivivienda" style="width:auto;margin:0">
+                                    <label class="checkbox-inline-label">
+                                        <input type="checkbox" id="acogido-mivivienda">
                                         Proyecto acogido a Mivivienda
                                     </label>
                                 </div>
@@ -218,7 +228,7 @@
                         </div>
                     </div>
 
-                    <div class="accordion-panel expanded">
+                    <div class="accordion-panel">
                         <div class="accordion-header">
                             <h2>3. Diseño Inmobiliario</h2>
                         </div>
@@ -235,8 +245,7 @@
                                 <div class="input-group full-width" id="ctrl-dptos">
                                     <label for="dptos-planta">Plantear N° de Dptos por Piso</label>
                                     <input type="number" id="dptos-planta" value="6" step="1" min="1" max="16">
-                                    <label class="toggle-switch mt-1"
-                                        style="transform: scale(0.85); transform-origin: left;">
+                                    <label class="toggle-switch toggle-sm mt-1">
                                         <input type="checkbox" id="optimizar-densidad">
                                         <span class="slider"></span>
                                         <span class="toggle-label">Maximizar densidad (ignora N°)</span>
@@ -246,54 +255,46 @@
                                     <label for="area-promedio">Área Promedio por Dpto (m²)</label>
                                     <input type="number" id="area-promedio" value="60" step="1" min="20" max="300">
                                 </div>
-                                <div class="input-group full-width" id="ctrl-mix" style="border-top: 1px solid var(--border-color); padding-top: 0.75rem; margin-top: 0.5rem;">
-                                    <label style="font-weight: 600;">Mix de Tipologías (0 = motor libre)</label>
-                                    <div style="display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap;">
-                                        <div style="flex:1; min-width: 60px;">
-                                            <label style="font-size:0.72rem; color:#64748b;">1 Dorm.</label>
-                                            <input type="number" id="mix-1d" value="0" step="1" min="0" max="20"
-                                                style="width:100%; padding: 4px 6px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.85rem;">
+                                <div class="input-group full-width field-divider" id="ctrl-mix">
+                                    <label class="fw-bold">Mix de Tipologías (0 = motor libre)</label>
+                                    <div class="field-row">
+                                        <div class="field-col">
+                                            <label>1 Dorm.</label>
+                                            <input type="number" id="mix-1d" value="0" step="1" min="0" max="20">
                                         </div>
-                                        <div style="flex:1; min-width: 60px;">
-                                            <label style="font-size:0.72rem; color:#64748b;">2 Dorm.</label>
-                                            <input type="number" id="mix-2d" value="0" step="1" min="0" max="20"
-                                                style="width:100%; padding: 4px 6px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.85rem;">
+                                        <div class="field-col">
+                                            <label>2 Dorm.</label>
+                                            <input type="number" id="mix-2d" value="0" step="1" min="0" max="20">
                                         </div>
-                                        <div style="flex:1; min-width: 60px;">
-                                            <label style="font-size:0.72rem; color:#64748b;">3 Dorm.</label>
-                                            <input type="number" id="mix-3d" value="0" step="1" min="0" max="20"
-                                                style="width:100%; padding: 4px 6px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.85rem;">
+                                        <div class="field-col">
+                                            <label>3 Dorm.</label>
+                                            <input type="number" id="mix-3d" value="0" step="1" min="0" max="20">
                                         </div>
                                     </div>
-                                    <div id="mix-total-display" style="margin-top: 4px; font-size: 0.75rem; color: #64748b;"></div>
+                                    <div id="mix-total-display" class="text-sm"></div>
                                 </div>
-                                <div class="input-group full-width" id="ctrl-precios" style="border-top: 1px solid var(--border-color); padding-top: 0.75rem; margin-top: 0.5rem;">
-                                    <label style="font-weight: 600;">Precios de Venta PEN/m² (0 = sin optimizador)</label>
-                                    <div style="display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap;">
-                                        <div style="flex:1; min-width: 52px;">
-                                            <label style="font-size:0.72rem; color:#64748b;">1D</label>
-                                            <input type="number" id="precio-1d" value="0" step="100" min="0"
-                                                style="width:100%; padding: 4px 6px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.85rem;">
+                                <div class="input-group full-width field-divider" id="ctrl-precios">
+                                    <label class="fw-bold">Precios de Venta PEN/m² (0 = sin optimizador)</label>
+                                    <div class="field-row">
+                                        <div class="field-col">
+                                            <label>1D</label>
+                                            <input type="number" id="precio-1d" value="0" step="100" min="0">
                                         </div>
-                                        <div style="flex:1; min-width: 52px;">
-                                            <label style="font-size:0.72rem; color:#64748b;">1D+E</label>
-                                            <input type="number" id="precio-1de" value="0" step="100" min="0"
-                                                style="width:100%; padding: 4px 6px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.85rem;">
+                                        <div class="field-col">
+                                            <label>1D+E</label>
+                                            <input type="number" id="precio-1de" value="0" step="100" min="0">
                                         </div>
-                                        <div style="flex:1; min-width: 52px;">
-                                            <label style="font-size:0.72rem; color:#64748b;">2D</label>
-                                            <input type="number" id="precio-2d" value="0" step="100" min="0"
-                                                style="width:100%; padding: 4px 6px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.85rem;">
+                                        <div class="field-col">
+                                            <label>2D</label>
+                                            <input type="number" id="precio-2d" value="0" step="100" min="0">
                                         </div>
-                                        <div style="flex:1; min-width: 52px;">
-                                            <label style="font-size:0.72rem; color:#64748b;">2D+E</label>
-                                            <input type="number" id="precio-2de" value="0" step="100" min="0"
-                                                style="width:100%; padding: 4px 6px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.85rem;">
+                                        <div class="field-col">
+                                            <label>2D+E</label>
+                                            <input type="number" id="precio-2de" value="0" step="100" min="0">
                                         </div>
-                                        <div style="flex:1; min-width: 52px;">
-                                            <label style="font-size:0.72rem; color:#64748b;">3D</label>
-                                            <input type="number" id="precio-3d" value="0" step="100" min="0"
-                                                style="width:100%; padding: 4px 6px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.85rem;">
+                                        <div class="field-col">
+                                            <label>3D</label>
+                                            <input type="number" id="precio-3d" value="0" step="100" min="0">
                                         </div>
                                     </div>
                                 </div>
@@ -305,20 +306,16 @@
                                         <option value="centro">Ducto Central Único</option>
                                     </select>
                                 </div>
-                                <div class="input-group full-width"
-                                    style="border-top: 1px solid var(--border-color); padding-top: 0.75rem; margin-top: 0.5rem;">
+                                <div class="input-group full-width field-divider">
                                     <label for="num-ascensores">N° de Ascensores (Estándar 2x2m c/u)</label>
                                     <input type="number" id="num-ascensores" value="1" step="1" min="0" max="4">
-                                    <div id="elevator-alert"
-                                        style="display:none; margin-top:4px; padding:6px 8px; background:#fef3c7; border:1px solid #f59e0b; border-radius:4px; font-size:0.75rem; color:#92400e; font-weight:500;">
-                                    </div>
+                                    <div id="elevator-alert" class="alert-box warn" style="display:none;"></div>
                                 </div>
-                                <div class="input-group full-width"
-                                    style="border-top: 1px solid var(--border-color); padding-top: 0.75rem; margin-top: 0.5rem;">
+                                <div class="input-group full-width field-divider">
                                     <label>Pozos de Luz — RNE A.010</label>
-                                    <div style="font-size:0.78rem; color:var(--text-secondary); margin-top:4px; line-height:1.5;">
+                                    <div class="text-sm" style="margin-top:4px; line-height:1.5;">
                                         Dimensión mínima = max(2.20 m, H/4).<br>
-                                        <span style="opacity:0.7;">Se calcula automáticamente según la altura del edificio y se genera en planta.</span>
+                                        <span class="text-secondary">Se calcula automáticamente según la altura del edificio y se genera en planta.</span>
                                     </div>
                                 </div>
                             </div>
@@ -332,24 +329,25 @@
                     </button>
                     <div id="ai-loader" class="ai-loader hidden">
                         <div class="spinner"></div>
-                        <span>Conectando con el motor de cálculo... <br><small style="opacity: 0.7;">La primera vez puede tardar ~30s</small></span>
+                        <span>Conectando con el motor de cálculo... <br><small class="text-secondary">La primera vez puede tardar ~30s</small></span>
                     </div>
+                    <div id="calc-error-banner" class="alert-box danger" style="display:none;"></div>
                 </div>
             </div>
             <!-- Tab: Normativa RNE -->
             <div id="normativa-tab" class="tab-content">
                 <!-- ── KPI Semaforo ── -->
-                <div id="norma-check-panel" style="display:none; padding:12px 14px; border-bottom:1px solid #e2e8f0;">
-                    <h3 style="font-size:0.8rem;font-weight:700;color:#1e293b;margin:0 0 10px;text-transform:uppercase;letter-spacing:.05em;">Chequeo Normativo</h3>
+                <div id="norma-check-panel" style="display:none; padding:12px 14px; border-bottom:1px solid var(--border-color);">
+                    <h3 class="normativa-subheading">Chequeo Normativo</h3>
                     <div id="norma-checks" style="display:flex;flex-direction:column;gap:5px;"></div>
-                    <h3 style="font-size:0.8rem;font-weight:700;color:#1e293b;margin:12px 0 8px;text-transform:uppercase;letter-spacing:.05em;">Topología Recomendada</h3>
-                    <div id="norma-topo" style="font-size:0.78rem;color:#334155;"></div>
-                    <h3 style="font-size:0.8rem;font-weight:700;color:#1e293b;margin:12px 0 8px;text-transform:uppercase;letter-spacing:.05em;">Validación por Dpto</h3>
+                    <h3 class="normativa-subheading">Topología Recomendada</h3>
+                    <div id="norma-topo" class="text-sm"></div>
+                    <h3 class="normativa-subheading">Validación por Dpto</h3>
                     <div id="norma-dptos" style="display:flex;flex-direction:column;gap:3px;max-height:160px;overflow-y:auto;"></div>
                 </div>
                 <div class="normativa-panel">
                     <h3>Consideraciones y Supuestos del Motor</h3>
-                    <p style="font-size:0.75rem;color:#64748b;margin:0 0 10px;">Todo lo que el motor asume, calcula o deja pendiente. Fuentes: RNE (Reglamento Nacional de Edificaciones) + estándares Lima Metropolitana.</p>
+                    <p class="normativa-caption">Todo lo que el motor asume, calcula o deja pendiente. Fuentes: RNE (Reglamento Nacional de Edificaciones) + estándares Lima Metropolitana.</p>
                     <p class="rnelink">
                         <a href="https://ww3.vivienda.gob.pe/ejes/vivienda-y-urbanismo/documentos/Reglamento%20Nacional%20de%20Edificaciones.pdf" target="_blank">
                             <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none">
@@ -362,29 +360,29 @@
                     </p>
 
                     <!-- 1. TIPOLOGÍAS -->
-                    <h4 style="font-size:0.82rem;font-weight:700;color:#1e293b;margin:16px 0 5px;text-transform:uppercase;letter-spacing:.04em;">1 · Tipologías de Vivienda</h4>
-                    <p style="font-size:0.75rem;color:#64748b;margin:0 0 7px;">Áreas netas interiores. Fuente: RNE A.020 + mercado Lima 2023-25.</p>
-                    <table style="width:100%;border-collapse:collapse;font-size:0.74rem;margin-bottom:4px;">
+                    <h4 class="normativa-subheading" style="margin-top:16px;">1 · Tipologías de Vivienda</h4>
+                    <p class="normativa-caption">Áreas netas interiores. Fuente: RNE A.020 + mercado Lima 2023-25.</p>
+                    <table class="grid-table compact">
                         <thead>
-                            <tr style="background:#f1f5f9;">
-                                <th style="padding:5px 7px;text-align:left;border-bottom:1px solid #cbd5e1;color:#475569;">Tipo</th>
-                                <th style="padding:5px 7px;text-align:right;border-bottom:1px solid #cbd5e1;color:#475569;">Umbral motor</th>
-                                <th style="padding:5px 7px;text-align:right;border-bottom:1px solid #cbd5e1;color:#475569;">Rango mercado</th>
-                                <th style="padding:5px 7px;text-align:right;border-bottom:1px solid #cbd5e1;color:#475569;">Área objetivo</th>
+                            <tr>
+                                <th>Tipo</th>
+                                <th class="text-right">Umbral motor</th>
+                                <th class="text-right">Rango mercado</th>
+                                <th class="text-right">Área objetivo</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:4px 7px;font-weight:600;">1D</td><td style="padding:4px 7px;text-align:right;color:#64748b;">&lt; 44 m²</td><td style="padding:4px 7px;text-align:right;color:#64748b;">40 – 60 m²</td><td style="padding:4px 7px;text-align:right;font-weight:700;color:#0f172a;">45 m²</td></tr>
-                            <tr style="border-bottom:1px solid #e2e8f0;background:#fafafa;"><td style="padding:4px 7px;font-weight:600;">1D+E</td><td style="padding:4px 7px;text-align:right;color:#64748b;">44 – 54 m²</td><td style="padding:4px 7px;text-align:right;color:#64748b;">50 – 70 m²</td><td style="padding:4px 7px;text-align:right;font-weight:700;color:#0f172a;">55 m²</td></tr>
-                            <tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:4px 7px;font-weight:600;">2D</td><td style="padding:4px 7px;text-align:right;color:#64748b;">54 – 72 m²</td><td style="padding:4px 7px;text-align:right;color:#64748b;">60 – 85 m²</td><td style="padding:4px 7px;text-align:right;font-weight:700;color:#0f172a;">68 m²</td></tr>
-                            <tr style="border-bottom:1px solid #e2e8f0;background:#fafafa;"><td style="padding:4px 7px;font-weight:600;">2D+E</td><td style="padding:4px 7px;text-align:right;color:#64748b;">72 – 92 m²</td><td style="padding:4px 7px;text-align:right;color:#64748b;">75 – 100 m²</td><td style="padding:4px 7px;text-align:right;font-weight:700;color:#0f172a;">80 m²</td></tr>
-                            <tr><td style="padding:4px 7px;font-weight:600;">3D</td><td style="padding:4px 7px;text-align:right;color:#64748b;">≥ 92 m²</td><td style="padding:4px 7px;text-align:right;color:#64748b;">90 – 130 m²</td><td style="padding:4px 7px;text-align:right;font-weight:700;color:#0f172a;">90 m²</td></tr>
+                            <tr><td class="fw-bold">1D</td><td class="text-right text-secondary">&lt; 44 m²</td><td class="text-right text-secondary">40 – 60 m²</td><td class="text-right fw-bold">45 m²</td></tr>
+                            <tr><td class="fw-bold">1D+E</td><td class="text-right text-secondary">44 – 54 m²</td><td class="text-right text-secondary">50 – 70 m²</td><td class="text-right fw-bold">55 m²</td></tr>
+                            <tr><td class="fw-bold">2D</td><td class="text-right text-secondary">54 – 72 m²</td><td class="text-right text-secondary">60 – 85 m²</td><td class="text-right fw-bold">68 m²</td></tr>
+                            <tr><td class="fw-bold">2D+E</td><td class="text-right text-secondary">72 – 92 m²</td><td class="text-right text-secondary">75 – 100 m²</td><td class="text-right fw-bold">80 m²</td></tr>
+                            <tr><td class="fw-bold">3D</td><td class="text-right text-secondary">≥ 92 m²</td><td class="text-right text-secondary">90 – 130 m²</td><td class="text-right fw-bold">90 m²</td></tr>
                         </tbody>
                     </table>
-                    <p style="font-size:0.71rem;color:#94a3b8;margin:3px 0 12px;">Umbral: área real de la unidad generada → tipología asignada. Área objetivo: frente de unidad = objetivo ÷ crujía disponible. RNE A.020 establece mín. absoluto 40 m².</p>
+                    <p class="normativa-caption fine">Umbral: área real de la unidad generada → tipología asignada. Área objetivo: frente de unidad = objetivo ÷ crujía disponible. RNE A.020 establece mín. absoluto 40 m².</p>
 
                     <!-- 2. NÚCLEO Y CIRCULACIÓN -->
-                    <h4 style="font-size:0.82rem;font-weight:700;color:#1e293b;margin:14px 0 5px;text-transform:uppercase;letter-spacing:.04em;">2 · Núcleo y Circulación</h4>
+                    <h4 class="normativa-subheading">2 · Núcleo y Circulación</h4>
                     <ul class="normativa-list">
                         <li>
                             <strong>Hall de distribución — RNE A.010</strong>
@@ -404,7 +402,7 @@
                     </ul>
 
                     <!-- 3. RETIROS Y MUROS -->
-                    <h4 style="font-size:0.82rem;font-weight:700;color:#1e293b;margin:14px 0 5px;text-transform:uppercase;letter-spacing:.04em;">3 · Retiros y Muros</h4>
+                    <h4 class="normativa-subheading">3 · Retiros y Muros</h4>
                     <ul class="normativa-list">
                         <li>
                             <strong>Retiros — valores por defecto</strong>
@@ -429,7 +427,7 @@
                     </ul>
 
                     <!-- 4. DUCTOS Y POZOS -->
-                    <h4 style="font-size:0.82rem;font-weight:700;color:#1e293b;margin:14px 0 5px;text-transform:uppercase;letter-spacing:.04em;">4 · Ductos y Pozos de Luz</h4>
+                    <h4 class="normativa-subheading">4 · Ductos y Pozos de Luz</h4>
                     <ul class="normativa-list">
                         <li>
                             <strong>Ductos zonas húmedas</strong>
@@ -449,7 +447,7 @@
                     </ul>
 
                     <!-- 5. FACHADAS -->
-                    <h4 style="font-size:0.82rem;font-weight:700;color:#1e293b;margin:14px 0 5px;text-transform:uppercase;letter-spacing:.04em;">5 · Fachadas y Orientación</h4>
+                    <h4 class="normativa-subheading">5 · Fachadas y Orientación</h4>
                     <ul class="normativa-list">
                         <li>
                             <strong>Lado frente</strong>
@@ -464,7 +462,7 @@
                     </ul>
 
                     <!-- 6. ESTACIONAMIENTOS -->
-                    <h4 style="font-size:0.82rem;font-weight:700;color:#1e293b;margin:14px 0 5px;text-transform:uppercase;letter-spacing:.04em;">6 · Estacionamientos</h4>
+                    <h4 class="normativa-subheading">6 · Estacionamientos</h4>
                     <ul class="normativa-list">
                         <li>
                             <strong>Dimensiones por cajón — RNE A.010 / A.070</strong>
@@ -474,7 +472,7 @@
                     </ul>
 
                     <!-- 7. INSTALACIONES -->
-                    <h4 style="font-size:0.82rem;font-weight:700;color:#1e293b;margin:14px 0 5px;text-transform:uppercase;letter-spacing:.04em;">7 · Instalaciones Sanitarias — IS.010</h4>
+                    <h4 class="normativa-subheading">7 · Instalaciones Sanitarias — IS.010</h4>
                     <ul class="normativa-list">
                         <li>
                             <strong>Dotación diaria de agua por tipología</strong>
@@ -494,7 +492,7 @@
                     </ul>
 
                     <!-- 8. TOPOLOGÍA -->
-                    <h4 style="font-size:0.82rem;font-weight:700;color:#1e293b;margin:14px 0 5px;text-transform:uppercase;letter-spacing:.04em;">8 · Topología Automática</h4>
+                    <h4 class="normativa-subheading">8 · Topología Automática</h4>
                     <ul class="normativa-list">
                         <li>
                             <strong>Doble crujía (spine) — default</strong>
@@ -514,8 +512,8 @@
                     </ul>
 
                     <!-- 9. CUADRO DE ÁREAS -->
-                    <h4 style="font-size:0.82rem;font-weight:700;color:#1e293b;margin:14px 0 5px;text-transform:uppercase;letter-spacing:.04em;">9 · Cuadro de Áreas — Supuestos</h4>
-                    <ul style="font-size:0.75rem;color:#475569;padding-left:1.2em;margin:0 0 12px;line-height:1.8;">
+                    <h4 class="normativa-subheading">9 · Cuadro de Áreas — Supuestos</h4>
+                    <ul class="normativa-plain-list">
                         <li><strong>Área techada por piso:</strong> masa edificable (lote - retiros) proyectada sobre el plano.</li>
                         <li><strong>Área techada total:</strong> área techada por piso × nº de pisos típicos (sin sotano ni azotea).</li>
                         <li><strong>Área vendible:</strong> suma de áreas netas de todos los departamentos en planta típica × pisos.</li>
@@ -527,8 +525,8 @@
                     </ul>
 
                     <!-- 10. PENDIENTES -->
-                    <h4 style="font-size:0.82rem;font-weight:700;color:#c2410c;margin:14px 0 5px;text-transform:uppercase;letter-spacing:.04em;">10 · Pendientes de Implementación</h4>
-                    <ul style="font-size:0.75rem;color:#7c2d12;padding-left:1.2em;margin:0;line-height:1.8;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:10px 10px 10px 24px;">
+                    <h4 class="normativa-subheading attention">10 · Pendientes de Implementación</h4>
+                    <ul class="normativa-plain-list pending">
                         <li>Planta azotea: cuarto de máquinas, caja de escalera.</li>
                         <li>Validación COS/CUS contra parámetros municipales ingresados.</li>
                     </ul>
@@ -539,56 +537,53 @@
         <!-- Main Content -->
         <main class="workspace">
             <div class="toolbar">
-                <div class="toolbar-left" style="display: flex; align-items: center; gap: 10px;">
+                <div class="toolbar-left">
                     <h2 id="viewport-title">Vista:</h2>
-                    <select id="viewport-level" class="btn-tool"
-                        style="font-size: 0.85rem; padding: 4px; border-radius: 4px; background: white; border-color: var(--border-dark); font-weight: 600;">
+                    <select id="viewport-level" class="btn-tool select-tool">
                         <option value="tipica">Planta Típica (Dptos)</option>
                         <option value="primero">Primer Piso (Urbano)</option>
                         <option value="sotano">Sótano (Estacionamientos)</option>
                         <option value="azotea">Azotea (Tanque / Máq.)</option>
                     </select>
-                    <select id="sotano-level-select" class="btn-tool"
-                        style="font-size: 0.8rem; padding: 4px; border-radius: 4px; background: white; border-color: var(--border-dark); display: none;">
+                    <select id="sotano-level-select" class="btn-tool select-tool sm" style="display:none">
                         <option value="0">S1</option>
                     </select>
                 </div>
                 <div class="toolbar-right">
-                    <button class="btn-tool" id="btn-toggle-view" title="Cambiar a Vista Mapa Satelital"
-                        style="margin-right: 15px; padding: 4px 12px; background: var(--brand-blue); color: white; border-radius: 4px; font-weight: 500; font-size: 0.8rem;">
-                        <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2"
-                            fill="none" style="vertical-align: middle; margin-right: 4px;">
+                    <button class="btn-tool accent" id="btn-toggle-view" title="Cambiar a Vista Mapa Satelital">
+                        <svg class="icon-inline" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2"
+                            fill="none">
                             <path
                                 d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z">
                             </path>
                         </svg>
                         Ver Mapa
                     </button>
-                    <label class="toggle-switch" title="Muestra u oculta la línea de límite de propiedad total">
+                    <label class="toggle-switch" title="Muestra u oculta la línea de límite de propiedad total" style="display:none">
                         <input type="checkbox" id="toggle-linderos" checked>
                         <span class="slider"></span>
                         <span class="toggle-label">Ver Polígono de Terreno</span>
                     </label>
-                    <button class="btn-tool" id="btn-draw-lote" title="Dibujar polígono de lote directamente sobre el plano"
-                        style="padding:4px 10px; background:#0f172a; color:white; border-color:#334155; font-size:0.8rem; font-weight:600;">
-                        ✏️ Dibujar Lote
+                    <button class="btn-tool on-dark" id="btn-draw-lote" title="Dibujar polígono de lote directamente sobre el plano" style="display:none">
+                        <svg class="icon-inline" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+                        Dibujar Lote
                     </button>
-                    <button class="btn-tool" id="btn-clear-custom-lote" title="Borrar lote personalizado y volver a parámetros"
-                        style="display:none; padding:4px 10px; background:#dc2626; color:white; border-color:#b91c1c; font-size:0.8rem; font-weight:600;">
-                        ✕ Lote Custom
+                    <button class="btn-tool danger" id="btn-clear-custom-lote" title="Borrar lote personalizado y volver a parámetros" style="display:none">
+                        <svg class="icon-inline" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                        Lote Custom
                     </button>
                     <label class="toggle-switch" title="Activa para modificar vértices manualmente">
                         <input type="checkbox" id="toggle-edit-mode">
                         <span class="slider"></span>
                         <span class="toggle-label">Modo Edición</span>
                     </label>
-                    <button class="btn-tool" onclick="resetView()" title="Centrar Vista">
+                    <button class="btn-tool icon-only" onclick="resetView()" title="Centrar Vista">
                         <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2"
                             fill="none">
                             <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
                         </svg>
                     </button>
-                    <button class="btn-tool" onclick="exportImage()" title="Exportar a PNG">
+                    <button class="btn-tool icon-only" onclick="exportImage()" title="Exportar a PNG">
                         <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2"
                             fill="none">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"></path>
@@ -599,8 +594,7 @@
 
             <div class="workspace-tabs">
                 <button class="ws-tab active" data-ws-tab="ws-viewport">
-                    <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"
-                        style="vertical-align: middle; margin-right: 4px;">
+                    <svg class="icon-inline" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none">
                         <path d="M4 4h16v16H4z" />
                         <path d="M4 12h16" />
                         <path d="M12 4v16" />
@@ -608,8 +602,7 @@
                     Planta
                 </button>
                 <button class="ws-tab" data-ws-tab="ws-datos">
-                    <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"
-                        style="vertical-align: middle; margin-right: 4px;">
+                    <svg class="icon-inline" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none">
                         <path d="M21.21 15.89A10 10 0 1 1 8 2.83" />
                         <path d="M22 12A10 10 0 0 0 12 2v10z" />
                     </svg>
@@ -630,15 +623,14 @@
                             class="kpi-bar-val kpi-blue"><span id="kpi-vendible-bar">0</span> m²</span></div>
                     <div class="kpi-bar-item"><span class="kpi-bar-label">Eficiencia</span><span
                             class="kpi-bar-val kpi-green"><span id="kpi-eficiencia-bar">0</span>%</span></div>
-                    <div class="kpi-bar-item"><span class="kpi-bar-label">Á. Libre</span><span class="kpi-bar-val"
-                            style="color:#f59e0b"><span id="kpi-libre-bar">0</span>%</span></div>
+                    <div class="kpi-bar-item"><span class="kpi-bar-label">Á. Libre</span><span
+                            class="kpi-bar-val kpi-amber"><span id="kpi-libre-bar">0</span>%</span></div>
                     <div class="kpi-bar-item"><span class="kpi-bar-label">Dptos Total</span><span
                             class="kpi-bar-val"><span id="kpi-dptos-bar">0</span></span></div>
                 </div>
 
                 <!-- Inviability Alert -->
-                <div id="inviability-alert"
-                    style="display:none; padding:6px 12px; background:#fef2f2; border-bottom:2px solid #dc2626; font-size:0.78rem; color:#991b1b; font-weight:600; flex-shrink:0;">
+                <div id="inviability-alert" class="alert-box danger banner" style="display:none; flex-shrink:0;">
                 </div>
 
                 <div class="canvas-container" id="canvas-wrapper"
@@ -646,7 +638,7 @@
 
                     <!-- MAP VIEWPORT (Hidden by default) -->
                     <div id="map-viewport"
-                        style="display: none; position: absolute; inset: 0; z-index: 10; background: #fff; flex-direction: column;">
+                        style="display: none; position: absolute; inset: 0; z-index: 30; background: #fff; flex-direction: column;">
                         <div
                             style="padding: 1rem; background: #f8fafc; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
                             <div>
@@ -695,13 +687,13 @@
                             </div>
                         </div>
                         <div id="backend-eval-panel" class="floating-panel"
-                            style="z-index: 5; display: none; max-width: 320px; right: 16px; top: 16px; left: auto; bottom: auto; position: absolute; font-size: 0.78rem;">
+                            style="z-index: 5; display: none; max-width: 320px; right: 16px; top: 16px; left: auto; bottom: auto; position: absolute; font-size: var(--font-size-sm);">
                         </div>
-                        <div id="elevator-alert" class="floating-panel"
-                            style="z-index: 6; display: none; background: #fef3c7; border-color: #d97706; color: #92400e; font-size: 0.8rem; max-width: 340px; right: 16px; bottom: 16px; left: auto; top: auto; position: absolute;">
+                        <div id="elevator-alert-float" class="floating-panel"
+                            style="z-index: 6; display: none; background: var(--color-warn-bg); border-color: var(--color-warn-border); color: var(--color-warn-text); font-size: var(--font-size-sm); max-width: 340px; right: 16px; bottom: 16px; left: auto; top: auto; position: absolute;">
                         </div>
-                        <div id="inviability-alert" class="floating-panel"
-                            style="z-index: 7; display: none; background: #fef2f2; border-color: #dc2626; color: #991b1b; font-size: 0.8rem; max-width: 400px; left: 16px; bottom: 16px; right: auto; top: auto; position: absolute;">
+                        <div id="inviability-alert-float" class="floating-panel"
+                            style="z-index: 7; display: none; background: var(--color-danger-bg); border-color: var(--color-danger-border); color: var(--color-danger-text); font-size: var(--font-size-sm); max-width: 400px; left: 16px; bottom: 16px; right: auto; top: auto; position: absolute;">
                         </div>
                         
                         <!-- Three.js (Viewer3D) container dinámico -->
@@ -883,7 +875,8 @@
     </div>
     </main>
     </div>
-    <script type="module" src="main.js?v=20260706a"></script>
+    <script type="module" src="main.js?v=20260717h"></script>
+    <script type="module" src="ui-fx.js?v=20260716a"></script>
 </body>
 
 </html>

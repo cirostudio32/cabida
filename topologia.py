@@ -85,6 +85,7 @@ def seleccionar_topologia(metricas: Dict[str, Any]) -> Dict[str, Any]:
 
     # Hall compacto: patrón real Lima moderna entre medianeras.
     # Núcleo lateral + hall compacto; dptos frente/fondo a todo el ancho.
+    # Etapa de desarrollo: 1 torre hasta 1400 m² (tope validado en frontend).
     if (not esquinero) and 7 <= short <= 45 and area <= 2200:
         candidatos.append((
             "hall_compacto", 0.90,
